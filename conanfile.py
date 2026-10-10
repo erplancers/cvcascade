@@ -20,6 +20,13 @@ class CvcascadeRecipe(ConanFile):
     def requirements(self):
         self.requires("opencv/4.10.0")
 
+    def configure(self):
+        # The app uses still-image decoding/features/stereo, not OpenCV GUI or video capture.
+        self.options["opencv"].with_gtk = False
+        self.options["opencv"].with_ffmpeg = False
+        self.options["opencv"].with_gstreamer = False
+        self.options["opencv"].with_v4l = False
+
     def build_requirements(self):
         self.tool_requires("cmake/3.30.5")
 
