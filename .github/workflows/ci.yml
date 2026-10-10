@@ -11,8 +11,12 @@ concurrency:
 
 jobs:
   build:
-    name: Conan build and tests (self-hosted Linux)
-    runs-on: [self-hosted, linux, x64]
+    name: Conan build and tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
