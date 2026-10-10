@@ -27,4 +27,4 @@ jobs:
       - name: Detect Conan profile
         run: conan profile detect --force
       - name: Resolve Conan dependencies, build, package and test
-        run: conan create . --build=missing -s build_type=Release
+        run: conan create . --build=missing -s build_type=Release -c tools.system.package_manager:mode=install

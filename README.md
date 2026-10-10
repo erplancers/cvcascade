@@ -16,9 +16,9 @@ A C++20 command-line photogrammetry prototype using **OpenCV** for image process
 
 ## Dependencies and cross-platform build
 
-The C++ libraries and CMake build tool are resolved through **Conan 2 / Conan Center**: OpenCV 4.14, Open CASCADE 7.9, and wxWidgets 3.2 for the desktop GUI. CI uses the same Conan recipe on Linux, Windows, and macOS; it does not install OpenCV, OCCT, wxWidgets, CMake, or Ninja from OS package managers.
+The C++ libraries and CMake build tool are resolved through **Conan 2 / Conan Center**: OpenCV 4.14, Open CASCADE 7.9, wxWidgets 3.2 for the desktop GUI, and CMake. On Linux, wxWidgets' GTK/X11 backend references native graphics and window-system SDK packages via Conan's `system` recipes; the build enables Conan's system-package integration to install missing host SDK packages automatically rather than maintaining a manual OS-package list in this project.
 
-You need Python 3.9+, Conan 2, and a native C++20 toolchain/SDK for your operating system (for example, Visual Studio Build Tools on Windows or Xcode Command Line Tools on macOS). The compiler and operating-system SDK are host toolchain prerequisites; third-party C++ libraries and the CMake build tool come from Conan.
+You need Python 3.9+, Conan 2, and a native C++20 compiler/SDK for your operating system (for example, Visual Studio Build Tools on Windows or Xcode Command Line Tools on macOS). The compiler and OS SDK are host toolchain prerequisites; project C++ libraries and the CMake build tool are resolved by Conan.
 
 ### Build and test through Conan
 
@@ -41,7 +41,7 @@ Activate Conan's generated build environment so the CMake executable supplied by
 
 - Linux/macOS: `source build/build/Release/generators/conanbuild.sh`
 - Windows Command Prompt: `call build\\build\\Release\\generators\\conanbuild.bat`
-- Windows PowerShell: `. .\\build\\Release\\generators\\conanbuild.ps1`
+- Windows PowerShell: `. ./build/build/Release/generators/conanbuild.ps1`
 
 Then configure, compile, test, and install:
 
