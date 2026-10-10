@@ -3,8 +3,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
+#include <cmath>
 
 namespace {
 void require(bool condition, const char* message) {
@@ -61,6 +63,42 @@ int main() {
             [&] { (void)cvcascade::reconstruct_multiview(list, root / "missing-camera.yml",
                                                          root / "mesh.stl", bad_options); },
             "SGBM disparity count must be a multiple of 16");
+
+        const std::vector<cvcascade::ColoredPoint> samples{
+            {0.10, 0.10, 0.10, 255, 0, 0},
+            {0.20, 0.20, 0.20, 0, 0, 255},
+            {1.10, 0.10, 0.10, 0, 255, 0}
+        };
+        const auto fused = cvcascade::fuse_point_cloud_voxels(samples, 1.0);
+        require(fused.size() == 2, "points in each voxel should be fused to one point");
+        require(std::abs(fused[0].x - 0.15) < 1e-9, "voxel fusion should average point coordinates");
+        require(fused[0].red == 128 && fused[0].green == 0 && fused[0].blue == 128,
+                "voxel fusion should average RGB colors");
+        require(fused[1].green == 255, "separate voxels should keep their own color");
+
+        require_throws<std::invalid_argument>(
+            [&] { (void)cvcascade::fuse_point_cloud_voxels(samples, 0.0); },
+            "zero voxel size must be rejected");
+
+        const auto ply_path = root / "fused.ply";
+        cvcascade::write_ply_point_cloud(ply_path, fused);
+        require(std::filesystem::exists(ply_path) && std::filesystem::file_size(ply_path) > 0,
+                "PLY export should create a non-empty file");
+        std::ifstream ply_file(ply_path);
+        const std::string ply((std::istreambuf_iterator<char>(ply_file)), std::istreambuf_iterator<char>());
+        require(ply.find("element vertex 2") != std::string::npos,
+                "PLY header should report the fused point count");
+        require(ply.find("property uchar red") != std::string::npos,
+                "PLY should expose color properties");
+        require(ply.find("128 0 128") != std::string::npos,
+                "PLY should contain the fused point color");
+
+        require_throws<std::invalid_argument>(
+            [&] {
+                const std::vector<cvcascade::ColoredPoint> bad{{NAN, 0.0, 0.0, 0, 0, 0}};
+                (void)cvcascade::fuse_point_cloud_voxels(bad, 1.0);
+            },
+            "non-finite point coordinates must be rejected");
 
         std::filesystem::remove_all(root);
         std::cout << "All photogrammetry tests passed\n";
