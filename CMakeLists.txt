@@ -9,29 +9,36 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc calib3d features2d)
-find_package(OpenCASCADE REQUIRED)
-if(CVCASCADE_ENABLE_OPENMP)
-  find_package(OpenMP)
-endif()
+# Third-party libraries are resolved by Conan and exposed through CMakeDeps.
+find_package(OpenCV CONFIG REQUIRED)
+find_package(OpenCASCADE CONFIG REQUIRED)
 
 add_library(cvcascade_core
   src/mesh_builder.cpp
   src/photogrammetry.cpp
 )
 target_include_directories(cvcascade_core PUBLIC include)
-target_include_directories(cvcascade_core SYSTEM PUBLIC
-  ${OpenCV_INCLUDE_DIRS}
-  ${OpenCASCADE_INCLUDE_DIR}
-)
 target_link_libraries(cvcascade_core PUBLIC
-  ${OpenCV_LIBS}
-  TKernel TKG2d TKG3d TKGeomBase TKBRep TKMesh TKSTL
+  opencv_core
+  opencv_imgcodecs
+  opencv_imgproc
+  opencv_calib3d
+  opencv_features2d
+  TKernel
+  TKG2d
+  TKG3d
+  TKGeomBase
+  TKBRep
+  TKMesh
+  TKSTL
 )
 
-if(OpenMP_CXX_FOUND)
-  target_link_libraries(cvcascade_core PUBLIC OpenMP::OpenMP_CXX)
-  target_compile_definitions(cvcascade_core PUBLIC CVCASCADE_HAS_OPENMP=1)
+if(CVCASCADE_ENABLE_OPENMP)
+  find_package(OpenMP QUIET)
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(cvcascade_core PUBLIC OpenMP::OpenMP_CXX)
+    target_compile_definitions(cvcascade_core PUBLIC CVCASCADE_HAS_OPENMP=1)
+  endif()
 endif()
 
 add_executable(cvcascade src/main.cpp)
@@ -39,10 +46,9 @@ target_link_libraries(cvcascade PRIVATE cvcascade_core)
 
 set(CVCASCADE_INSTALL_TARGETS cvcascade)
 if(CVCASCADE_BUILD_GUI)
-  find_package(wxWidgets REQUIRED COMPONENTS core base)
-  include(${wxWidgets_USE_FILE})
+  find_package(wxWidgets CONFIG REQUIRED)
   add_executable(cvcascade_gui src/gui_main.cpp)
-  target_link_libraries(cvcascade_gui PRIVATE cvcascade_core ${wxWidgets_LIBRARIES})
+  target_link_libraries(cvcascade_gui PRIVATE cvcascade_core wxWidgets::wxWidgets)
   list(APPEND CVCASCADE_INSTALL_TARGETS cvcascade_gui)
 endif()
 
