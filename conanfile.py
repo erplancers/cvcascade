@@ -16,6 +16,8 @@ class CvcascadeRecipe(ConanFile):
         "with_openmp": True,
         "with_gui": True,
         "with_tests": True,
+        # GTK3 pulls libepoxy; avoid its optional EGL system SDK dependency.
+        "libepoxy/*:egl": False,
     }
     exports_sources = "CMakeLists.txt", "include/**", "src/**", "tests/**", "README.md"
 
