@@ -61,7 +61,7 @@ MeshStats write_stl(const cv::Mat& height_map, const MeshOptions& options, const
     BRep_Builder builder;
     builder.MakeFace(face, triangulation);
     StlAPI_Writer writer;
-    if (!writer.Write(face, output_path)) throw std::runtime_error("Open CASCADE failed to write STL: " + output_path);
+    if (!writer.Write(face, output_path.c_str())) throw std::runtime_error("Open CASCADE failed to write STL: " + output_path);
     return {rows, cols, static_cast<std::size_t>(2) * (rows - 1) * (cols - 1), min_h, max_h};
 }
 }
