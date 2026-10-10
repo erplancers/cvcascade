@@ -17,8 +17,12 @@
 #include <array>
 #include <cmath>
 #include <fstream>
+#include <iomanip>
+#include <limits>
 #include <stdexcept>
 #include <string>
+#include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -35,6 +39,12 @@ std::string trim(std::string value) {
 cv::Mat read_gray_image(const std::filesystem::path& path) {
     cv::Mat image = cv::imread(path.string(), cv::IMREAD_GRAYSCALE);
     if (image.empty()) throw std::runtime_error("cannot read image: " + path.string());
+    return image;
+}
+
+cv::Mat read_color_image(const std::filesystem::path& path) {
+    cv::Mat image = cv::imread(path.string(), cv::IMREAD_COLOR);
+    if (image.empty()) throw std::runtime_error("cannot decode color image: " + path.string());
     return image;
 }
 
@@ -71,8 +81,8 @@ CameraModel camera_for_size(const CameraModel& source, cv::Size target_size) {
 }
 
 struct RelativePose {
-    cv::Mat rotation;      // X_next = R * X_current + t
-    cv::Mat translation;   // Unit translation unless baseline-mm is supplied
+    cv::Mat rotation;
+    cv::Mat translation;
     std::size_t good_matches = 0;
     std::size_t inliers = 0;
 };
@@ -141,6 +151,7 @@ bool valid_depth(float a, float b, double relative_jump) {
 std::size_t append_dense_stereo_mesh(
     const cv::Mat& first,
     const cv::Mat& second,
+    const cv::Mat& color_first,
     const CameraModel& camera,
     const RelativePose& relative_pose,
     const cv::Mat& world_to_camera_rotation,
@@ -148,7 +159,12 @@ std::size_t append_dense_stereo_mesh(
     const PhotogrammetryOptions& options,
     BRep_Builder& builder,
     TopoDS_Compound& compound,
-    std::size_t& vertex_count) {
+    std::size_t& vertex_count,
+    std::vector<ColoredPoint>* cloud_samples,
+    std::size_t& stereo_candidates,
+    std::size_t& stereo_consistent,
+    std::size_t& stereo_rejected,
+    double& valid_depth_ratio) {
 
     cv::Mat r1, r2, p1, p2, q;
     cv::stereoRectify(camera.camera_matrix, camera.distortion_coefficients,
@@ -164,14 +180,35 @@ std::size_t append_dense_stereo_mesh(
     cv::remap(first, rectified_first, map11, map12, cv::INTER_LINEAR);
     cv::remap(second, rectified_second, map21, map22, cv::INTER_LINEAR);
 
+    cv::Mat rectified_color_first;
+    if (cloud_samples != nullptr)
+        cv::remap(color_first, rectified_color_first, map11, map12, cv::INTER_LINEAR);
+
     const int block = options.block_size;
-    auto stereo = cv::StereoSGBM::create(
-        0, options.num_disparities, block,
-        8 * block * block, 32 * block * block,
-        1, 31, 10, 100, 2, cv::StereoSGBM::MODE_SGBM_3WAY);
-    cv::Mat disparity_fixed, disparity, xyz;
-    stereo->compute(rectified_first, rectified_second, disparity_fixed);
+    auto make_stereo = [&](int min_disparity) {
+        return cv::StereoSGBM::create(
+            min_disparity, options.num_disparities, block,
+            8 * block * block, 32 * block * block,
+            1, 31, 10, 100, options.speckle_window_size,
+            cv::StereoSGBM::MODE_SGBM_3WAY);
+    };
+
+    cv::Mat disparity_fixed, reverse_disparity_fixed, disparity, reverse_disparity, xyz;
+    make_stereo(0)->compute(rectified_first, rectified_second, disparity_fixed);
+    make_stereo(-options.num_disparities)->compute(
+        rectified_second, rectified_first, reverse_disparity_fixed);
+
+    if (options.speckle_window_size > 0) {
+        cv::filterSpeckles(disparity_fixed, -16, options.speckle_window_size,
+                           std::max(1, options.speckle_range) * 16);
+        cv::filterSpeckles(reverse_disparity_fixed,
+                           (-options.num_disparities - 1) * 16,
+                           options.speckle_window_size,
+                           std::max(1, options.speckle_range) * 16);
+    }
+
     disparity_fixed.convertTo(disparity, CV_32F, 1.0 / 16.0);
+    reverse_disparity_fixed.convertTo(reverse_disparity, CV_32F, 1.0 / 16.0);
     cv::reprojectImageTo3D(disparity, xyz, q, false, CV_32F);
 
     const int rows = xyz.rows;
@@ -180,6 +217,7 @@ std::size_t append_dense_stereo_mesh(
     std::vector<float> depth(static_cast<std::size_t>(rows) * cols, 0.0F);
     std::vector<gp_Pnt> vertices;
     vertices.reserve(static_cast<std::size_t>(rows) * cols / 2);
+    std::size_t valid_depth_samples = 0;
 
     const cv::Mat rectified_to_camera = r1.t();
     const cv::Mat camera_to_world_rotation = world_to_camera_rotation.t();
@@ -189,8 +227,24 @@ std::size_t append_dense_stereo_mesh(
         for (int x = 0; x < cols; ++x) {
             const std::size_t offset = static_cast<std::size_t>(y) * cols + x;
             const float d = disparity.at<float>(y, x);
+            if (!(d > 0.5F) || !std::isfinite(d)) continue;
+            ++stereo_candidates;
+
+            const int xr = cvRound(static_cast<double>(x) - d);
+            if (xr < 0 || xr >= cols) {
+                ++stereo_rejected;
+                continue;
+            }
+            const float reverse_d = reverse_disparity.at<float>(y, xr);
+            if (!std::isfinite(reverse_d) || !(reverse_d < -0.5F) ||
+                std::abs(static_cast<double>(d) + reverse_d) > options.left_right_tolerance) {
+                ++stereo_rejected;
+                continue;
+            }
+            ++stereo_consistent;
+
             const cv::Vec3f point = xyz.at<cv::Vec3f>(y, x);
-            if (!(d > 0.5F) || !std::isfinite(point[0]) || !std::isfinite(point[1]) ||
+            if (!std::isfinite(point[0]) || !std::isfinite(point[1]) ||
                 !std::isfinite(point[2]) || !(point[2] > 0.0F) || point[2] > options.max_depth)
                 continue;
 
@@ -203,8 +257,16 @@ std::size_t append_dense_stereo_mesh(
             vertices.emplace_back(wx, wy, wz);
             node_index[offset] = static_cast<Standard_Integer>(vertices.size());
             depth[offset] = point[2];
+            ++valid_depth_samples;
+
+            if (cloud_samples != nullptr) {
+                const cv::Vec3b bgr = rectified_color_first.at<cv::Vec3b>(y, x);
+                cloud_samples->push_back({wx, wy, wz, bgr[2], bgr[1], bgr[0]});
+            }
         }
     }
+    valid_depth_ratio = static_cast<double>(valid_depth_samples) /
+        static_cast<double>(std::max<std::size_t>(1, static_cast<std::size_t>(rows) * cols));
 
     std::vector<std::array<Standard_Integer, 3>> triangles;
     triangles.reserve(static_cast<std::size_t>(rows - 1) * (cols - 1));
@@ -244,7 +306,102 @@ std::size_t append_dense_stereo_mesh(
     return triangles.size();
 }
 
+struct VoxelKey {
+    std::int64_t x;
+    std::int64_t y;
+    std::int64_t z;
+    bool operator==(const VoxelKey& other) const noexcept {
+        return x == other.x && y == other.y && z == other.z;
+    }
+};
+
+struct VoxelHash {
+    std::size_t operator()(const VoxelKey& key) const noexcept {
+        const auto h1 = std::hash<std::int64_t>{}(key.x);
+        const auto h2 = std::hash<std::int64_t>{}(key.y);
+        const auto h3 = std::hash<std::int64_t>{}(key.z);
+        return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1 << 6U) + (h1 >> 2U)) ^
+               (h3 + 0x9e3779b97f4a7c15ULL + (h2 << 6U) + (h2 >> 2U));
+    }
+};
+
+struct VoxelAccum {
+    double x = 0.0, y = 0.0, z = 0.0;
+    std::uint64_t red = 0, green = 0, blue = 0, count = 0;
+};
+
 } // namespace
+
+std::vector<ColoredPoint> fuse_point_cloud_voxels(
+    const std::vector<ColoredPoint>& points, double voxel_size) {
+    if (!(voxel_size > 0.0) || !std::isfinite(voxel_size))
+        throw std::invalid_argument("fusion voxel size must be finite and positive");
+
+    std::unordered_map<VoxelKey, VoxelAccum, VoxelHash> voxels;
+    voxels.reserve(points.size());
+    const long double low = static_cast<long double>(std::numeric_limits<std::int64_t>::min()) + 1.0L;
+    const long double high = static_cast<long double>(std::numeric_limits<std::int64_t>::max()) - 1.0L;
+
+    for (const auto& point : points) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+            throw std::invalid_argument("point cloud contains a non-finite coordinate");
+        const long double vx = std::floor(static_cast<long double>(point.x) / voxel_size);
+        const long double vy = std::floor(static_cast<long double>(point.y) / voxel_size);
+        const long double vz = std::floor(static_cast<long double>(point.z) / voxel_size);
+        if (vx < low || vx > high || vy < low || vy > high || vz < low || vz > high)
+            throw std::out_of_range("point coordinates exceed voxel grid index range");
+
+        auto& voxel = voxels[VoxelKey{static_cast<std::int64_t>(vx),
+                                      static_cast<std::int64_t>(vy),
+                                      static_cast<std::int64_t>(vz)}];
+        voxel.x += point.x;
+        voxel.y += point.y;
+        voxel.z += point.z;
+        voxel.red += point.red;
+        voxel.green += point.green;
+        voxel.blue += point.blue;
+        ++voxel.count;
+    }
+
+    std::vector<ColoredPoint> fused;
+    fused.reserve(voxels.size());
+    for (const auto& entry : voxels) {
+        const auto& voxel = entry.second;
+        const double count = static_cast<double>(voxel.count);
+        fused.push_back({
+            voxel.x / count, voxel.y / count, voxel.z / count,
+            static_cast<std::uint8_t>(std::lround(static_cast<double>(voxel.red) / count)),
+            static_cast<std::uint8_t>(std::lround(static_cast<double>(voxel.green) / count)),
+            static_cast<std::uint8_t>(std::lround(static_cast<double>(voxel.blue) / count))
+        });
+    }
+    std::sort(fused.begin(), fused.end(), [](const ColoredPoint& a, const ColoredPoint& b) {
+        return std::tie(a.x, a.y, a.z, a.red, a.green, a.blue) <
+               std::tie(b.x, b.y, b.z, b.red, b.green, b.blue);
+    });
+    return fused;
+}
+
+void write_ply_point_cloud(
+    const std::filesystem::path& output_path,
+    const std::vector<ColoredPoint>& points) {
+    if (output_path.empty()) throw std::invalid_argument("PLY output path must not be empty");
+    std::ofstream output(output_path);
+    if (!output) throw std::runtime_error("cannot write PLY point cloud: " + output_path.string());
+    output << "ply\nformat ascii 1.0\nelement vertex " << points.size()
+           << "\nproperty double x\nproperty double y\nproperty double z"
+           << "\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n";
+    output << std::setprecision(12);
+    for (const auto& point : points) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+            throw std::invalid_argument("cannot write a point cloud containing non-finite coordinates");
+        output << point.x << ' ' << point.y << ' ' << point.z << ' '
+               << static_cast<unsigned>(point.red) << ' '
+               << static_cast<unsigned>(point.green) << ' '
+               << static_cast<unsigned>(point.blue) << '\n';
+    }
+    if (!output) throw std::runtime_error("failed while writing PLY point cloud: " + output_path.string());
+}
 
 std::vector<std::filesystem::path> read_image_list(const std::filesystem::path& list_path) {
     std::ifstream input(list_path);
@@ -357,7 +514,8 @@ ReconstructionStats reconstruct_multiview(
     const std::filesystem::path& image_list,
     const std::filesystem::path& calibration_path,
     const std::filesystem::path& output_stl,
-    const PhotogrammetryOptions& options) {
+    const PhotogrammetryOptions& options,
+    const std::filesystem::path& output_ply) {
 
     if (options.max_dimension < 64) throw std::invalid_argument("max-dimension must be at least 64");
     if (options.num_disparities < 16 || options.num_disparities % 16 != 0)
@@ -371,18 +529,31 @@ ReconstructionStats reconstruct_multiview(
         throw std::invalid_argument("max-depth must be finite and positive");
     if (!(options.max_relative_depth_jump > 0.0 && options.max_relative_depth_jump <= 1.0))
         throw std::invalid_argument("depth-jump must be in the interval (0, 1]");
+    if (!(options.left_right_tolerance > 0.0) || !std::isfinite(options.left_right_tolerance))
+        throw std::invalid_argument("left-right tolerance must be finite and positive");
+    if (!(options.fusion_voxel_size > 0.0) || !std::isfinite(options.fusion_voxel_size))
+        throw std::invalid_argument("fusion voxel size must be finite and positive");
+    if (options.speckle_window_size < 0 || options.speckle_range < 0)
+        throw std::invalid_argument("speckle window and range must be non-negative");
     if (output_stl.empty()) throw std::invalid_argument("output STL path must not be empty");
 
     const auto paths = read_image_list(image_list);
     if (paths.size() < 2) throw std::runtime_error("multi-view reconstruction needs at least two images");
 
     std::vector<cv::Mat> images;
+    std::vector<cv::Mat> color_images;
     images.reserve(paths.size());
-    for (const auto& path : paths)
+    color_images.reserve(paths.size());
+    for (const auto& path : paths) {
         images.push_back(resize_image(read_gray_image(path), options.max_dimension));
+        if (!output_ply.empty())
+            color_images.push_back(resize_image(read_color_image(path), options.max_dimension));
+    }
     for (std::size_t i = 1; i < images.size(); ++i) {
         if (images[i].size() != images[0].size())
             throw std::runtime_error("all reconstruction images must have the same size/aspect ratio");
+        if (!color_images.empty() && color_images[i].size() != color_images[0].size())
+            throw std::runtime_error("all reconstruction color images must have the same dimensions");
     }
     if (options.num_disparities >= images[0].cols)
         throw std::invalid_argument("num-disparities must be smaller than the reconstructed image width");
@@ -400,6 +571,7 @@ ReconstructionStats reconstruct_multiview(
     ReconstructionStats stats;
     stats.images = images.size();
     stats.metric_scale = options.baseline_mm > 0.0;
+    double inlier_ratio_sum = 0.0;
 
     for (std::size_t i = 1; i < images.size(); ++i) {
         RelativePose pose = estimate_relative_pose(images[i - 1], images[i], camera, options.min_inliers);
@@ -412,28 +584,49 @@ ReconstructionStats reconstruct_multiview(
         camera_translations[i] = pose.rotation * camera_translations[i - 1] + pose.translation;
         stats.feature_matches += pose.good_matches;
         stats.pose_inliers += pose.inliers;
+        inlier_ratio_sum += static_cast<double>(pose.inliers) /
+            static_cast<double>(std::max<std::size_t>(1, pose.good_matches));
         pair_poses.push_back(std::move(pose));
     }
+    stats.mean_pose_inlier_ratio = inlier_ratio_sum / static_cast<double>(pair_poses.size());
 
     BRep_Builder builder;
     TopoDS_Compound compound;
     builder.MakeCompound(compound);
+    std::vector<ColoredPoint> cloud_samples;
+    if (!output_ply.empty()) cloud_samples.reserve(
+        static_cast<std::size_t>(images.size() - 1) * images[0].total() / 2);
+    double valid_ratio_sum = 0.0;
+
     for (std::size_t i = 0; i < pair_poses.size(); ++i) {
+        const cv::Mat& color_first = output_ply.empty() ? images[i] : color_images[i];
+        double valid_ratio = 0.0;
         const std::size_t triangles = append_dense_stereo_mesh(
-            images[i], images[i + 1], camera, pair_poses[i],
+            images[i], images[i + 1], color_first, camera, pair_poses[i],
             camera_rotations[i], camera_translations[i], options,
-            builder, compound, stats.vertices);
-        if (triangles > 0) {
-            stats.triangles += triangles;
-            ++stats.registered_pairs;
-        }
+            builder, compound, stats.vertices,
+            output_ply.empty() ? nullptr : &cloud_samples,
+            stats.stereo_candidates, stats.stereo_consistent, stats.stereo_rejected,
+            valid_ratio);
+        valid_ratio_sum += valid_ratio;
+        stats.triangles += triangles;
+        if (triangles > 0) ++stats.registered_pairs;
     }
+    stats.mean_valid_depth_ratio = valid_ratio_sum / static_cast<double>(pair_poses.size());
+
     if (stats.triangles == 0)
         throw std::runtime_error("dense stereo produced no valid triangles; check overlap, lighting, texture and disparity range");
 
     StlAPI_Writer writer;
     if (!writer.Write(compound, output_stl.string().c_str()))
         throw std::runtime_error("Open CASCADE failed to write STL: " + output_stl.string());
+
+    if (!output_ply.empty()) {
+        const auto fused = fuse_point_cloud_voxels(cloud_samples, options.fusion_voxel_size);
+        if (fused.empty()) throw std::runtime_error("no points remain after dense point-cloud fusion");
+        write_ply_point_cloud(output_ply, fused);
+        stats.fused_points = fused.size();
+    }
     return stats;
 }
 
