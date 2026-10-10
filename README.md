@@ -25,7 +25,7 @@ You need Python 3.9+, Conan 2, and a native C++20 compiler/SDK for your operatin
 ```bash
 python -m pip install --upgrade "conan>=2.0,<3.0"
 conan profile detect --force
-conan create . --build=missing -s build_type=Release
+conan create . --build=missing -s build_type=Release -c tools.system.package_manager:mode=install
 ```
 
 `conan create` downloads/builds the required Conan packages, configures and compiles CVCascade, installs the package into the Conan cache, and runs CTest. The default build includes the wxWidgets GUI and all tests.
@@ -34,7 +34,7 @@ conan create . --build=missing -s build_type=Release
 
 ```bash
 conan profile detect --force
-conan install . --output-folder=build --build=missing -s build_type=Release
+conan install . --output-folder=build --build=missing -s build_type=Release -c tools.system.package_manager:mode=install
 ```
 
 Activate Conan's generated build environment so the CMake executable supplied by Conan is on `PATH`:
