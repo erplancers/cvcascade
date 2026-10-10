@@ -37,7 +37,7 @@ class CvcascadeRecipe(ConanFile):
             "with_vulkan": False,
             "with_openvino": False,
             "dnn_cuda": False,
-            "with_jpeg": "libjpeg-turbo",
+            "with_jpeg": "libjpeg",
             "with_png": True,
             "with_tiff": False,
             "with_jpeg2000": False,
@@ -71,7 +71,7 @@ class CvcascadeRecipe(ConanFile):
             "with_opengl": False,
         })
         if self.options.with_gui:
-            self.requires("wxwidgets/3.2.11", options={"jpeg": "libjpeg-turbo"})
+            self.requires("wxwidgets/3.2.11", options={"jpeg": "libjpeg"})
 
     def build_requirements(self):
         self.tool_requires("cmake/3.30.5")
