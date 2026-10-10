@@ -33,22 +33,29 @@ cv::Mat make_height_map(const cv::Mat& grayscale, const MeshOptions& options) {
 MeshStats write_stl(const cv::Mat& height_map, const MeshOptions& options, const std::string& output_path) {
     if (height_map.empty() || height_map.type() != CV_32F || height_map.rows < 2 || height_map.cols < 2)
         throw std::invalid_argument("height map must be a non-empty CV_32F matrix at least 2x2");
+    if (!(options.width > 0.0) || !std::isfinite(options.width))
+        throw std::invalid_argument("width must be finite and positive");
     if (output_path.empty()) throw std::invalid_argument("output path must not be empty");
     const int rows = height_map.rows, cols = height_map.cols;
     const double dx = options.width / static_cast<double>(cols - 1);
     const double dy = options.width * static_cast<double>(rows - 1) / static_cast<double>(cols - 1);
     auto triangulation = new Poly_Triangulation(rows * cols, 2 * (rows - 1) * (cols - 1), Standard_False);
     double min_h = std::numeric_limits<double>::max(), max_h = std::numeric_limits<double>::lowest();
+    // Each iteration writes a unique triangulation node; reductions keep the reported range deterministic.
+    #pragma omp parallel for collapse(2) reduction(min:min_h) reduction(max:max_h)
     for (int y = 0; y < rows; ++y) for (int x = 0; x < cols; ++x) {
         const double h = static_cast<double>(height_map.at<float>(y, x));
         min_h = std::min(min_h, h); max_h = std::max(max_h, h);
-        triangulation->SetNode(y * cols + x + 1, gp_Pnt(x * dx, (rows - 1 - y) * dy / (rows - 1), h));
+        const double px = x * dx;
+        const double py = (rows - 1 - y) * dy / static_cast<double>(rows - 1);
+        triangulation->SetNode(y * cols + x + 1, gp_Pnt(px, py, h));
     }
-    int triangle = 1;
+    #pragma omp parallel for collapse(2)
     for (int y = 0; y < rows - 1; ++y) for (int x = 0; x < cols - 1; ++x) {
         const int a = y * cols + x + 1, b = a + 1, c = (y + 1) * cols + x + 1, d = c + 1;
-        triangulation->SetTriangle(triangle++, Poly_Triangle(a, b, d));
-        triangulation->SetTriangle(triangle++, Poly_Triangle(a, d, c));
+        const int first = 2 * (y * (cols - 1) + x) + 1;
+        triangulation->SetTriangle(first, Poly_Triangle(a, b, d));
+        triangulation->SetTriangle(first + 1, Poly_Triangle(a, d, c));
     }
     TopoDS_Face face;
     BRep_Builder builder;
