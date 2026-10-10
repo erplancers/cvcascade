@@ -4,6 +4,7 @@
 #include <wx/wx.h>
 #include <wx/notebook.h>
 #include <wx/filedlg.h>
+#include <wx/filename.h>
 #include <wx/gauge.h>
 #include <wx/statbmp.h>
 #include <wx/spinctrl.h>
@@ -14,6 +15,7 @@
 #include <atomic>
 #include <cmath>
 #include <functional>
+#include <filesystem>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -303,42 +305,46 @@ private:
     void BuildReconstructionPage() {
         auto* page = new wxPanel(notebook_);
         notebook_->AddPage(page, "Multi-view reconstruction");
+        auto* page_sizer = new wxBoxSizer(wxVERTICAL);
+        auto* scroller = new wxScrolledWindow(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL);
+        scroller->SetScrollRate(0, 14);
         auto* outer = new wxBoxSizer(wxVERTICAL);
-        auto* intro = new wxStaticText(page, wxID_ANY,
+
+        auto* intro = new wxStaticText(scroller, wxID_ANY,
             "Incremental SfM + pairwise stereo. Use ordered, overlapping photographs from the calibrated camera.");
         intro->Wrap(1000);
         outer->Add(intro, 0, wxALL, 10);
 
-        auto* files = new wxStaticBoxSizer(wxVERTICAL, page, "Inputs and outputs");
-        reconstruction_images_ = AddPathRow(page, files, "Image manifest (.txt)", "views.txt",
+        auto* files = new wxStaticBoxSizer(wxVERTICAL, scroller, "Inputs and outputs");
+        reconstruction_images_ = AddPathRow(scroller, files, "Image manifest (.txt)", "views.txt",
             PickMode::Open, "Text manifest (*.txt)|*.txt|All files|*.*");
-        reconstruction_calibration_ = AddPathRow(page, files, "Camera calibration", "camera.yml",
+        reconstruction_calibration_ = AddPathRow(scroller, files, "Camera calibration", "camera.yml",
             PickMode::Open, "Calibration files (*.yml;*.yaml;*.xml)|*.yml;*.yaml;*.xml|All files|*.*");
-        reconstruction_stl_ = AddPathRow(page, files, "Output mesh (.stl)", "reconstruction.stl",
+        reconstruction_stl_ = AddPathRow(scroller, files, "Output mesh (.stl)", "reconstruction.stl",
             PickMode::Save, "STL mesh (*.stl)|*.stl|All files|*.*");
-        reconstruction_ply_ = AddPathRow(page, files, "Optional RGB point cloud (.ply)", "reconstruction.ply",
+        reconstruction_ply_ = AddPathRow(scroller, files, "Optional RGB point cloud (.ply)", "reconstruction.ply",
             PickMode::Save, "PLY point cloud (*.ply)|*.ply|All files|*.*");
         outer->Add(files, 0, wxEXPAND | wxLEFT | wxRIGHT, 8);
 
-        auto* settings = new wxStaticBoxSizer(wxVERTICAL, page, "Stereo, filtering and fusion");
+        auto* settings = new wxStaticBoxSizer(wxVERTICAL, scroller, "Stereo, filtering and fusion");
         auto* grid = new wxFlexGridSizer(2, 8, 12);
         grid->AddGrowableCol(1, 1);
         auto add_grid = [&](const wxString& label, wxWindow* control) {
-            grid->Add(new wxStaticText(page, wxID_ANY, label), 0, wxALIGN_CENTER_VERTICAL);
+            grid->Add(new wxStaticText(scroller, wxID_ANY, label), 0, wxALIGN_CENTER_VERTICAL);
             grid->Add(control, 1, wxEXPAND);
         };
 
-        reconstruction_dimension_ = MakeInt(page, 640, 64, 8192, 64);
-        disparities_ = MakeInt(page, 128, 16, 4096, 16);
-        block_size_ = MakeInt(page, 5, 3, 51, 2);
-        min_inliers_ = MakeInt(page, 30, 8, 100000);
-        baseline_mm_ = MakeDouble(page, 0.0, 0.0, 1000000000.0, 1.0, 3);
-        max_depth_ = MakeDouble(page, 10000.0, 0.001, 1000000000.0, 100.0, 3);
-        depth_jump_ = MakeDouble(page, 0.20, 0.001, 1.0, 0.01, 3);
-        lr_tolerance_ = MakeDouble(page, 1.5, 0.1, 1000.0, 0.1, 2);
-        speckle_window_ = MakeInt(page, 100, 0, 100000);
-        speckle_range_ = MakeInt(page, 2, 0, 10000);
-        fusion_voxel_ = MakeDouble(page, 2.0, 0.001, 1000000000.0, 0.5, 3);
+        reconstruction_dimension_ = MakeInt(scroller, 640, 64, 8192, 64);
+        disparities_ = MakeInt(scroller, 128, 16, 4096, 16);
+        block_size_ = MakeInt(scroller, 5, 3, 51, 2);
+        min_inliers_ = MakeInt(scroller, 30, 8, 100000);
+        baseline_mm_ = MakeDouble(scroller, 0.0, 0.0, 1000000000.0, 1.0, 3);
+        max_depth_ = MakeDouble(scroller, 10000.0, 0.001, 1000000000.0, 100.0, 3);
+        depth_jump_ = MakeDouble(scroller, 0.20, 0.001, 1.0, 0.01, 3);
+        lr_tolerance_ = MakeDouble(scroller, 1.5, 0.1, 1000.0, 0.1, 2);
+        speckle_window_ = MakeInt(scroller, 100, 0, 100000);
+        speckle_range_ = MakeInt(scroller, 2, 0, 10000);
+        fusion_voxel_ = MakeDouble(scroller, 2.0, 0.001, 1000000000.0, 0.5, 3);
 
         add_grid("Maximum image dimension", reconstruction_dimension_);
         add_grid("Disparities (multiple of 16)", disparities_);
@@ -354,21 +360,17 @@ private:
         settings->Add(grid, 0, wxEXPAND | wxALL, 10);
         outer->Add(settings, 0, wxEXPAND | wxALL, 8);
 
-        auto* note = new wxStaticText(page, wxID_ANY,
+        auto* note = new wxStaticText(scroller, wxID_ANY,
             "Without a known baseline, scale and voxel size are arbitrary. Voxel fusion affects PLY; "
             "the STL retains per-pair surfaces. Global bundle adjustment and watertight repair are not implemented.");
         note->Wrap(1000);
         outer->Add(note, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
-        auto* run = new wxButton(page, wxID_ANY, "Reconstruct mesh and point cloud");
+        auto* run = new wxButton(scroller, wxID_ANY, "Reconstruct mesh and point cloud");
         run->SetMinSize(wxSize(-1, 40));
         outer->Add(run, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         run->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { RunReconstruction(); });
 
-        auto* scroller = new wxScrolledWindow(page, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                              wxVSCROLL);
-        scroller->SetScrollRate(0, 14);
         scroller->SetSizer(outer);
-        auto* page_sizer = new wxBoxSizer(wxVERTICAL);
         page_sizer->Add(scroller, 1, wxEXPAND);
         page->SetSizer(page_sizer);
     }
