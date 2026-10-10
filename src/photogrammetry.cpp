@@ -256,7 +256,7 @@ std::vector<std::filesystem::path> read_image_list(const std::filesystem::path& 
         line = trim(line);
         if (line.empty() || line.front() == '#') continue;
         std::filesystem::path path(line);
-        if (path.is_relative() && !std::filesystem::exists(path)) {
+        if (path.is_relative()) {
             const auto relative_to_list = list_path.parent_path() / path;
             if (std::filesystem::exists(relative_to_list)) path = relative_to_list;
         }
