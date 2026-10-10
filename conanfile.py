@@ -8,7 +8,13 @@ class CvcascadeRecipe(ConanFile):
     package_type = "application"
     settings = "os", "arch", "compiler", "build_type"
     options = {"with_openmp": [True, False]}
-    default_options = {"with_openmp": True}
+    default_options = {
+        "with_openmp": True,
+        "opencv/*:with_gtk": False,
+        "opencv/*:with_ffmpeg": False,
+        "opencv/*:with_gstreamer": False,
+        "opencv/*:with_v4l": False,
+    }
     exports_sources = "CMakeLists.txt", "include/**", "src/**", "tests/**", "README.md"
 
     def requirements(self):
