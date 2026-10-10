@@ -1,14 +1,15 @@
 from conan import ConanFile
 from conan.tools.cmake import CMake, cmake_layout, CMakeToolchain, CMakeDeps
 
+
 class CvcascadeRecipe(ConanFile):
     name = "cvcascade"
-    version = "0.2.0"
+    version = "0.3.0"
     package_type = "application"
     settings = "os", "arch", "compiler", "build_type"
     options = {"with_openmp": [True, False]}
     default_options = {"with_openmp": True}
-    exports_sources = "CMakeLists.txt", "include/*", "src/*", "tests/*", "README.md"
+    exports_sources = "CMakeLists.txt", "include/**", "src/**", "tests/**", "README.md"
 
     def requirements(self):
         self.requires("opencv/4.10.0")
