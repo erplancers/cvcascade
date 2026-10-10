@@ -21,16 +21,19 @@ void usage(std::ostream& out) {
         << "            --board-cols N --board-rows N --square-size-mm MM\n"
         << "\nMulti-view reconstruction:\n"
         << "  cvcascade --reconstruct --images views.txt --calibration camera.yml --output model.stl\n"
-        << "            [--max-dimension N] [--num-disparities N] [--block-size N]\n"
-        << "            [--min-inliers N] [--baseline-mm MM] [--max-depth N] [--depth-jump RATIO]\n"
-        << "\nThe multi-view path matches ORB features, estimates adjacent camera poses, and runs SGBM stereo.\n"
-        << "Without --baseline-mm, geometry scale is arbitrary. Adjacent images need strong overlap and texture.\n";
+        << "            [--point-cloud cloud.ply] [--fusion-voxel N] [--lr-tolerance PX]\n"
+        << "            [--speckle-window N] [--speckle-range N] [--max-dimension N]\n"
+        << "            [--num-disparities N] [--block-size N] [--min-inliers N]\n"
+        << "            [--baseline-mm MM] [--max-depth N] [--depth-jump RATIO]\n"
+        << "\nMulti-view uses ORB/RANSAC poses, left-right checked SGBM, speckle filtering and depth-edge rejection.\n"
+        << "--point-cloud exports a voxel-fused RGB PLY in addition to the STL mesh.\n"
+        << "Without --baseline-mm, model units and fusion voxel units are arbitrary.\n";
 }
 }
 
 int main(int argc, char** argv) {
     try {
-        std::string input, output, image_list, calibration_path;
+        std::string input, output, image_list, calibration_path, point_cloud_path;
         cvcascade::MeshOptions mesh_options;
         cvcascade::PhotogrammetryOptions photogrammetry_options;
         bool calibrate = false, reconstruct = false;
@@ -53,6 +56,7 @@ int main(int argc, char** argv) {
             else if (arg == "--output") output = value("--output");
             else if (arg == "--images") image_list = value("--images");
             else if (arg == "--calibration") calibration_path = value("--calibration");
+            else if (arg == "--point-cloud") point_cloud_path = value("--point-cloud");
             else if (arg == "--calibrate") calibrate = true;
             else if (arg == "--reconstruct") reconstruct = true;
             else if (arg == "--width") mesh_options.width = std::stod(value("--width"));
@@ -73,6 +77,10 @@ int main(int argc, char** argv) {
             else if (arg == "--baseline-mm") photogrammetry_options.baseline_mm = std::stod(value("--baseline-mm"));
             else if (arg == "--max-depth") photogrammetry_options.max_depth = std::stod(value("--max-depth"));
             else if (arg == "--depth-jump") photogrammetry_options.max_relative_depth_jump = std::stod(value("--depth-jump"));
+            else if (arg == "--lr-tolerance") photogrammetry_options.left_right_tolerance = std::stod(value("--lr-tolerance"));
+            else if (arg == "--fusion-voxel") photogrammetry_options.fusion_voxel_size = std::stod(value("--fusion-voxel"));
+            else if (arg == "--speckle-window") photogrammetry_options.speckle_window_size = std::stoi(value("--speckle-window"));
+            else if (arg == "--speckle-range") photogrammetry_options.speckle_range = std::stoi(value("--speckle-range"));
             else throw std::invalid_argument("unknown argument: " + arg);
         }
 
@@ -98,16 +106,27 @@ int main(int argc, char** argv) {
             if (image_list.empty() || calibration_path.empty() || output.empty())
                 throw std::invalid_argument("--reconstruct requires --images, --calibration and --output");
             const auto stats = cvcascade::reconstruct_multiview(
-                image_list, calibration_path, output, photogrammetry_options);
-            std::cout << "Wrote " << output
+                image_list, calibration_path, output, photogrammetry_options, point_cloud_path);
+            const double consistent_percent = stats.stereo_candidates > 0
+                ? 100.0 * static_cast<double>(stats.stereo_consistent) / stats.stereo_candidates : 0.0;
+            std::cout << "Wrote mesh: " << output
                       << "\nImages: " << stats.images
-                      << "\nDense stereo pairs: " << stats.registered_pairs
+                      << "\nDense stereo pairs with triangles: " << stats.registered_pairs
                       << "\nRatio-filtered feature matches: " << stats.feature_matches
                       << "\nPose inliers: " << stats.pose_inliers
-                      << "\nVertices: " << stats.vertices
-                      << "\nTriangles: " << stats.triangles
+                      << "\nMean pose inlier ratio: " << stats.mean_pose_inlier_ratio
+                      << "\nMean valid depth ratio: " << stats.mean_valid_depth_ratio
+                      << "\nStereo candidates: " << stats.stereo_candidates
+                      << "\nLeft-right consistent pixels: " << stats.stereo_consistent
+                      << "\nLeft-right consistency: " << consistent_percent << "%"
+                      << "\nRejected by stereo consistency: " << stats.stereo_rejected
+                      << "\nMesh vertices: " << stats.vertices
+                      << "\nMesh triangles: " << stats.triangles
                       << "\nScale: " << (stats.metric_scale ? "baseline-scaled (approximate)" : "arbitrary monocular scale")
                       << "\n";
+            if (!point_cloud_path.empty())
+                std::cout << "Wrote fused RGB point cloud: " << point_cloud_path
+                          << "\nFused points: " << stats.fused_points << "\n";
             return 0;
         }
 
