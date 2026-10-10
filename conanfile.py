@@ -14,24 +14,17 @@ class CvcascadeRecipe(ConanFile):
     default_options = {
         "with_openmp": True,
         "with_conan_opencv": True,
-        "opencv/*:with_gtk": False,
-        "opencv/*:with_ffmpeg": False,
-        "opencv/*:with_gstreamer": False,
-        "opencv/*:with_v4l": False,
     }
     exports_sources = "CMakeLists.txt", "include/**", "src/**", "tests/**", "README.md"
 
     def requirements(self):
         if self.options.with_conan_opencv:
-            self.requires("opencv/4.10.0")
-
-    def configure(self):
-        if self.options.with_conan_opencv:
-            # The app uses still-image decoding/features/stereo, not OpenCV GUI or video capture.
-            self.options["opencv"].with_gtk = False
-            self.options["opencv"].with_ffmpeg = False
-            self.options["opencv"].with_gstreamer = False
-            self.options["opencv"].with_v4l = False
+            self.requires("opencv/4.10.0", options={
+                "with_gtk": False,
+                "with_ffmpeg": False,
+                "with_gstreamer": False,
+                "with_v4l": False,
+            })
 
     def build_requirements(self):
         self.tool_requires("cmake/3.30.5")
