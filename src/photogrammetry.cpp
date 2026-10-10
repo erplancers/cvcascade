@@ -60,6 +60,7 @@ CameraModel camera_for_size(const CameraModel& source, cv::Size target_size) {
 
     CameraModel scaled = source;
     source.camera_matrix.convertTo(scaled.camera_matrix, CV_64F);
+    scaled.camera_matrix = scaled.camera_matrix.clone();
     source.distortion_coefficients.convertTo(scaled.distortion_coefficients, CV_64F);
     scaled.camera_matrix.at<double>(0, 0) *= sx;
     scaled.camera_matrix.at<double>(0, 2) *= sx;
