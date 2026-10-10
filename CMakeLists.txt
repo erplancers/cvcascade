@@ -3,6 +3,7 @@ project(cvcascade VERSION 0.3.0 LANGUAGES CXX)
 
 option(CVCASCADE_BUILD_TESTS "Build unit and CLI tests" ON)
 option(CVCASCADE_ENABLE_OPENMP "Enable OpenMP parallel mesh construction" ON)
+option(CVCASCADE_BUILD_GUI "Build the wxWidgets desktop application" ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,8 +37,17 @@ endif()
 add_executable(cvcascade src/main.cpp)
 target_link_libraries(cvcascade PRIVATE cvcascade_core)
 
+set(CVCASCADE_INSTALL_TARGETS cvcascade)
+if(CVCASCADE_BUILD_GUI)
+  find_package(wxWidgets REQUIRED COMPONENTS core base)
+  include(${wxWidgets_USE_FILE})
+  add_executable(cvcascade_gui src/gui_main.cpp)
+  target_link_libraries(cvcascade_gui PRIVATE cvcascade_core ${wxWidgets_LIBRARIES})
+  list(APPEND CVCASCADE_INSTALL_TARGETS cvcascade_gui)
+endif()
+
 include(GNUInstallDirs)
-install(TARGETS cvcascade RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS ${CVCASCADE_INSTALL_TARGETS} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 if(CVCASCADE_BUILD_TESTS)
   enable_testing()
