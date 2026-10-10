@@ -24,13 +24,13 @@ target_link_libraries(cvcascade_core PUBLIC
   opencv_imgproc
   opencv_calib3d
   opencv_features2d
-  OpenCASCADE::TKernel
-  OpenCASCADE::TKG2d
-  OpenCASCADE::TKG3d
-  OpenCASCADE::TKGeomBase
-  OpenCASCADE::TKBRep
-  OpenCASCADE::TKMesh
-  OpenCASCADE::TKSTL
+  TKernel
+  TKG2d
+  TKG3d
+  TKGeomBase
+  TKBRep
+  TKMesh
+  TKSTL
 )
 
 if(CVCASCADE_ENABLE_OPENMP)
