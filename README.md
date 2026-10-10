@@ -1,12 +1,17 @@
 # cvcascade
 
-A C++20 command-line photogrammetry prototype using **OpenCV** for image processing, camera calibration, feature matching and dense stereo, and **Open CASCADE Technology (OCCT)** for triangulated geometry and STL export. OpenMP remains optional for the original image-relief mesh builder. Builds use CMake, Conan 2 and CTest.
+A C++20 command-line photogrammetry prototype using **OpenCV** for image processing, camera calibration, feature matching and dense stereo, and **Open CASCADE Technology (OCCT)** for triangulated geometry and STL export. OpenMP is optional for the relief mesh builder. Builds use CMake, Conan 2 and CTest.
 
-## Modes
+## Capabilities
 
-- **Single-image relief:** maps grayscale brightness to height. Useful for bas-reliefs and lithophanes, not full-object reconstruction.
-- **Camera calibration:** estimates intrinsics and lens distortion from chessboard images.
-- **Multi-view reconstruction:** matches ORB features between consecutive images, uses RANSAC essential-matrix estimation and pose recovery, rectifies each pair, computes a semi-global block-matching (SGBM) disparity map, triangulates depth and exports the pairwise meshes through OCCT.
+- **Single-image relief:** brightness-driven height mapping for bas-reliefs and lithophanes.
+- **Camera calibration:** chessboard-based intrinsics and lens-distortion calibration.
+- **Incremental multi-view reconstruction:** ORB feature matching, RANSAC essential-matrix estimation, relative pose recovery and chained camera poses.
+- **Bidirectional stereo consistency:** computes forward and reverse SGBM disparity and rejects ambiguous matches.
+- **Speckle/outlier suppression:** disparity speckle filtering, max-depth rejection and relative depth discontinuity rejection before surface triangulation.
+- **Dense colored point cloud:** optional RGB PLY export from the rectified source images.
+- **Voxel-grid fusion:** deterministic voxel downsampling that averages point coordinates and colors to reduce duplicate samples across adjacent stereo pairs.
+- **Reconstruction quality report:** reports feature matches/inliers, pose inlier ratio, valid-depth ratio, stereo consistency counts and mesh size.
 
 ## Dependencies and build (Linux)
 
@@ -25,7 +30,7 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-If Conan reports another generated toolchain path, use the path printed by Conan. OCCT is installed as a system development dependency on the CI image; package names can differ by Linux distribution.
+If Conan reports another generated toolchain path, use the path printed by Conan. CI installs OCCT and OpenCV from Ubuntu packages to avoid building unrelated optional GUI/media dependencies through Conan. The Conan recipe still supports Conan-managed OpenCV for normal builds.
 
 ## 1. Single-image relief
 
@@ -50,7 +55,7 @@ calibration/board_03.jpg
 calibration/board_04.jpg
 ```
 
-Use images from the **same camera and resolution**. Capture at least 5-15 varied views of a printed chessboard with the board at different distances and tilts. Board dimensions are the number of **inner corners**, not the number of squares.
+Use images from the **same camera and resolution**. Capture 5-15 varied views of a printed chessboard at different distances and tilts. Board dimensions are the number of **inner corners**, not squares.
 
 ```bash
 ./build/cvcascade --calibrate \
@@ -61,9 +66,9 @@ Use images from the **same camera and resolution**. Capture at least 5-15 varied
 
 The calibration file stores the camera matrix, distortion coefficients, image dimensions and reprojection RMS. Use your board's actual inner-corner layout and square size.
 
-## 3. Multi-view photogrammetry and dense stereo
+## 3. Multi-view photogrammetry, dense stereo and fusion
 
-Capture a sequence that moves around the object while keeping **substantial overlap (typically 60-80%)**, stable focus/exposure and visible surface texture. Use the calibrated camera and keep image dimensions/aspect ratio consistent. List the images in capture order in `views.txt`:
+Capture a sequence around the object with **substantial overlap (typically 60-80%)**, stable focus/exposure and visible surface texture. Keep image dimensions/aspect ratio consistent and use the same camera settings. List images in capture order in `views.txt`:
 
 ```text
 photos/view_001.jpg
@@ -73,25 +78,36 @@ photos/view_004.jpg
 photos/view_005.jpg
 ```
 
-Then reconstruct:
+Export both a mesh and a colored, voxel-fused PLY point cloud:
 
 ```bash
 ./build/cvcascade --reconstruct \
-  --images views.txt --calibration camera.yml --output reconstruction.stl \
-  --max-dimension 640 --num-disparities 128 --block-size 5 --min-inliers 30
+  --images views.txt --calibration camera.yml \
+  --output reconstruction.stl --point-cloud reconstruction.ply \
+  --max-dimension 640 --num-disparities 128 --block-size 5 \
+  --min-inliers 30 --lr-tolerance 1.5 \
+  --speckle-window 100 --speckle-range 2 \
+  --fusion-voxel 2.0 --depth-jump 0.20
 ```
 
-Important options:
+The console report includes the number of feature matches and pose inliers, mean inlier ratio, average valid-depth ratio, left-right stereo consistency, rejected stereo candidates, mesh vertices/triangles and fused point count.
 
-- `--num-disparities N`: SGBM search range; must be a multiple of 16 and smaller than the image width.
+### Reconstruction options
+
+- `--num-disparities N`: SGBM search range; a positive multiple of 16 and smaller than image width.
 - `--block-size N`: odd matching-window size, at least 3.
-- `--min-inliers N`: minimum geometrically consistent feature matches for each adjacent pair.
-- `--max-depth N`: reject points deeper than this value in the pair's depth frame (millimetres only when a valid `--baseline-mm` scale is supplied; otherwise units are arbitrary).
-- `--depth-jump RATIO`: reject triangles crossing a large relative depth discontinuity (default 0.20).
-- `--baseline-mm MM`: set the assumed translation length for **each adjacent pair**. If omitted, monocular pose recovery leaves the reconstruction at arbitrary scale.
+- `--min-inliers N`: minimum geometrically consistent feature matches per adjacent pair.
+- `--lr-tolerance PX`: allowed forward/reverse disparity disagreement; lower is stricter, but can remove more points.
+- `--speckle-window N`: remove disparity islands smaller than this size; set 0 to disable speckle removal.
+- `--speckle-range N`: disparity difference threshold for speckle filtering.
+- `--max-depth N`: reject points deeper than this value in the pair's depth frame. Values are only in millimetres when a valid metric baseline is used.
+- `--depth-jump RATIO`: reject triangles that cross a large relative depth discontinuity (default 0.20).
+- `--baseline-mm MM`: assumed translation length for each adjacent image pair. Without it, monocular pose recovery produces arbitrary scale.
+- `--point-cloud cloud.ply`: additionally export an ASCII PLY with RGB colors.
+- `--fusion-voxel N`: voxel size for point-cloud downsampling/fusion. Units are millimetres only when the supplied baseline genuinely defines metric scale; otherwise they are arbitrary model units.
 
-The pipeline is deliberately an initial incremental SfM + pairwise MVS implementation: it chains relative poses and appends valid dense stereo surfaces into an OCCT triangulated compound. It does **not** yet include global bundle adjustment, loop closure, globally fused depth maps, texture baking, or watertight surface repair. Pairwise poses are approximate; using `--baseline-mm` is only metrically meaningful when the assumed consecutive baseline matches the capture setup. For unconstrained handheld sequences, scale and accumulated drift will remain uncertain.
+The pipeline remains an incremental SfM + pairwise MVS prototype. It chains relative poses and appends pairwise triangulated surfaces into an OCCT compound. Voxel fusion currently applies to the optional point cloud, not to the STL mesh. It does **not** yet include global bundle adjustment, loop closure, global depth-map fusion, texture baking, or watertight mesh repair. Pairwise poses can accumulate drift; setting `--baseline-mm` is metrically meaningful only when each adjacent pair really uses that baseline. Glossy, textureless, moving, or poorly lit scenes remain difficult.
 
 ## Tests
 
-CTest covers brightness-to-height mapping, inversion, dimension limits, CLI help, image-list parsing, and photogrammetry argument/file validation. CI configures a Conan profile before resolving dependencies, then builds and runs CTest.
+CTest covers relief mapping and STL export, image-list parsing, calibration/CLI validation, voxel fusion/color averaging, invalid voxel sizes, and PLY header/content export. CI configures a Conan profile before resolving dependencies, then builds and runs CTest.
