@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <filesystem>
 #include <stdexcept>
 namespace { void require(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); } }
 int main() {
@@ -26,6 +27,15 @@ int main() {
         options.width = 100; options.max_dimension = 32; options.invert = false;
         const cv::Mat reduced = cvcascade::make_height_map(large, options);
         require(std::max(reduced.rows, reduced.cols) <= 32, "large images must be downsampled");
+
+        const auto stl_path = std::filesystem::temp_directory_path() / "cvcascade_mesh_builder_test.stl";
+        std::filesystem::remove(stl_path);
+        const auto mesh_stats = cvcascade::write_stl(heights, options, stl_path.string());
+        require(mesh_stats.triangles == 4, "2x3 height map should create four triangles");
+        require(std::filesystem::exists(stl_path) && std::filesystem::file_size(stl_path) > 0,
+                "Open CASCADE should write a non-empty STL file");
+        std::filesystem::remove(stl_path);
+
         std::cout << "All mesh builder tests passed\n"; return 0;
     } catch (const std::exception& e) { std::cerr << "TEST FAILURE: " << e.what() << "\n"; return 1; }
 }
