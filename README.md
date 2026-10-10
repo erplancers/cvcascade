@@ -86,7 +86,7 @@ Important options:
 - `--num-disparities N`: SGBM search range; must be a multiple of 16 and smaller than the image width.
 - `--block-size N`: odd matching-window size, at least 3.
 - `--min-inliers N`: minimum geometrically consistent feature matches for each adjacent pair.
-- `--max-depth MM`: reject points deeper than this value in the pair's depth frame.
+- `--max-depth N`: reject points deeper than this value in the pair's depth frame (millimetres only when a valid `--baseline-mm` scale is supplied; otherwise units are arbitrary).
 - `--depth-jump RATIO`: reject triangles crossing a large relative depth discontinuity (default 0.20).
 - `--baseline-mm MM`: set the assumed translation length for **each adjacent pair**. If omitted, monocular pose recovery leaves the reconstruction at arbitrary scale.
 
