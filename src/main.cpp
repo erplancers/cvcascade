@@ -22,7 +22,7 @@ void usage(std::ostream& out) {
         << "\nMulti-view reconstruction:\n"
         << "  cvcascade --reconstruct --images views.txt --calibration camera.yml --output model.stl\n"
         << "            [--max-dimension N] [--num-disparities N] [--block-size N]\n"
-        << "            [--min-inliers N] [--baseline-mm MM] [--max-depth MM] [--depth-jump RATIO]\n"
+        << "            [--min-inliers N] [--baseline-mm MM] [--max-depth N] [--depth-jump RATIO]\n"
         << "\nThe multi-view path matches ORB features, estimates adjacent camera poses, and runs SGBM stereo.\n"
         << "Without --baseline-mm, geometry scale is arbitrary. Adjacent images need strong overlap and texture.\n";
 }
