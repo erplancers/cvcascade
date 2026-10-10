@@ -16,7 +16,7 @@ A C++20 command-line photogrammetry prototype using **OpenCV** for image process
 
 ## Dependencies and cross-platform build
 
-The C++ libraries and CMake build tool are resolved through **Conan 2 / Conan Center**: OpenCV 4.14, Open CASCADE 7.9, wxWidgets 3.2 for the desktop GUI, and CMake. On Linux, wxWidgets' GTK/X11 backend references native graphics and window-system SDK packages via Conan's `system` recipes; the build enables Conan's system-package integration to install missing host SDK packages automatically rather than maintaining a manual OS-package list in this project.
+The C++ libraries and CMake build tool are resolved through **Conan 2 / Conan Center**: OpenCV 4.14, Open CASCADE 7.9, wxWidgets 3.2 for the desktop GUI, and CMake. On Linux, wxWidgets' GTK/X11 backend also relies on native graphics/window-system SDK components that Conan Center models with `system` recipes. CI lets Conan install any missing host SDK packages through those recipes; this requires elevated privileges on Linux, so the Linux CI commands run Conan with `sudo`. No manual OS-package list is maintained in CVCascade.
 
 You need Python 3.9+, Conan 2, and a native C++20 compiler/SDK for your operating system (for example, Visual Studio Build Tools on Windows or Xcode Command Line Tools on macOS). The compiler and OS SDK are host toolchain prerequisites; project C++ libraries and the CMake build tool are resolved by Conan.
 
