@@ -71,7 +71,7 @@ class CvcascadeRecipe(ConanFile):
             "with_opengl": False,
         })
         if self.options.with_gui:
-            self.requires("wxwidgets/3.2.11", options={"jpeg": "libjpeg"})
+            self.requires("wxwidgets/3.2.11", options={"jpeg": "libjpeg", "opengl": False})
 
     def build_requirements(self):
         self.tool_requires("cmake/3.30.5")
