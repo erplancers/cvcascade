@@ -30,7 +30,7 @@ target_link_libraries(cvcascade_core PUBLIC
   TKGeomBase
   TKBRep
   TKMesh
-  TKSTL
+  TKDESTL
 )
 
 if(CVCASCADE_ENABLE_OPENMP)
