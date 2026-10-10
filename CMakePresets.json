@@ -1,0 +1,16 @@
+{
+  "version": 6,
+  "configurePresets": [{
+    "name": "conan-release",
+    "displayName": "Conan Release",
+    "generator": "Ninja",
+    "binaryDir": "${sourceDir}/build",
+    "cacheVariables": {
+      "CMAKE_BUILD_TYPE": "Release",
+      "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/build/build/Release/generators/conan_toolchain.cmake",
+      "CVCASCADE_BUILD_TESTS": "ON"
+    }
+  }],
+  "buildPresets": [{"name": "release", "configurePreset": "conan-release"}],
+  "testPresets": [{"name": "release", "configurePreset": "conan-release", "output": {"outputOnFailure": true}}]
+}
