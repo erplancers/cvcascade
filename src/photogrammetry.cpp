@@ -17,6 +17,7 @@
 #include <array>
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <stdexcept>
@@ -189,7 +190,7 @@ std::size_t append_dense_stereo_mesh(
         return cv::StereoSGBM::create(
             min_disparity, options.num_disparities, block,
             8 * block * block, 32 * block * block,
-            1, 31, 10, 100, options.speckle_window_size,
+            1, 31, 10, options.speckle_window_size, options.speckle_range,
             cv::StereoSGBM::MODE_SGBM_3WAY);
     };
 
@@ -386,6 +387,10 @@ void write_ply_point_cloud(
     const std::filesystem::path& output_path,
     const std::vector<ColoredPoint>& points) {
     if (output_path.empty()) throw std::invalid_argument("PLY output path must not be empty");
+    for (const auto& point : points) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+            throw std::invalid_argument("cannot write a point cloud containing non-finite coordinates");
+    }
     std::ofstream output(output_path);
     if (!output) throw std::runtime_error("cannot write PLY point cloud: " + output_path.string());
     output << "ply\nformat ascii 1.0\nelement vertex " << points.size()
@@ -393,8 +398,6 @@ void write_ply_point_cloud(
            << "\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n";
     output << std::setprecision(12);
     for (const auto& point : points) {
-        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
-            throw std::invalid_argument("cannot write a point cloud containing non-finite coordinates");
         output << point.x << ' ' << point.y << ' ' << point.z << ' '
                << static_cast<unsigned>(point.red) << ' '
                << static_cast<unsigned>(point.green) << ' '
@@ -536,6 +539,8 @@ ReconstructionStats reconstruct_multiview(
     if (options.speckle_window_size < 0 || options.speckle_range < 0)
         throw std::invalid_argument("speckle window and range must be non-negative");
     if (output_stl.empty()) throw std::invalid_argument("output STL path must not be empty");
+    if (!output_ply.empty() && output_ply.lexically_normal() == output_stl.lexically_normal())
+        throw std::invalid_argument("STL mesh and PLY point cloud must use different output paths");
 
     const auto paths = read_image_list(image_list);
     if (paths.size() < 2) throw std::runtime_error("multi-view reconstruction needs at least two images");
