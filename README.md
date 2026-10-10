@@ -1,6 +1,6 @@
 # cvcascade
 
-A C++20 command-line photogrammetry prototype using **OpenCV** for image processing, camera calibration, feature matching and dense stereo, and **Open CASCADE Technology (OCCT)** for triangulated geometry and STL export. OpenMP is optional for the relief mesh builder. Builds use CMake, Conan 2 and CTest.
+A C++20 command-line photogrammetry prototype using **OpenCV** for image processing, camera calibration, feature matching and dense stereo, and **Open CASCADE Technology (OCCT)** for triangulated geometry and STL export. OpenMP is optional for the relief mesh builder. Includes a wxWidgets desktop workbench as well as the CLI. Builds use CMake, Conan 2 and CTest.
 
 ## Capabilities
 
@@ -11,6 +11,7 @@ A C++20 command-line photogrammetry prototype using **OpenCV** for image process
 - **Speckle/outlier suppression:** disparity speckle filtering, max-depth rejection and relative depth discontinuity rejection before surface triangulation.
 - **Dense colored point cloud:** optional RGB PLY export from the rectified source images.
 - **Voxel-grid fusion:** deterministic voxel downsampling that averages point coordinates and colors to reduce duplicate samples across adjacent stereo pairs.
+- **wxWidgets desktop GUI:** graphical workflows for relief generation, camera calibration, and reconstruction with browse dialogs, image preview, adjustable parameters, background execution, progress indicator, logs, and result summaries.
 - **Reconstruction quality report:** reports feature matches/inliers, pose inlier ratio, valid-depth ratio, stereo consistency counts and mesh size.
 
 ## Dependencies and build (Linux)
@@ -19,7 +20,7 @@ Requires a C++20 compiler, CMake 3.24+, Conan 2.x, OpenCV modules core/imgcodecs
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y cmake ninja-build libocct-foundation-dev libocct-modeling-data-dev libocct-modeling-algorithms-dev libocct-data-exchange-dev
+sudo apt-get install -y cmake ninja-build libopencv-dev libwxgtk3.2-dev libocct-foundation-dev libocct-modeling-data-dev libocct-modeling-algorithms-dev libocct-data-exchange-dev
 python -m pip install "conan>=2.0,<3.0"
 conan profile detect --force
 conan install . --output-folder=build --build=missing -s build_type=Release
@@ -28,7 +29,10 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCVCASCADE_BUILD_TESTS=ON
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
+./build/cvcascade_gui
 ```
+
+To build only the headless CLI on systems without wxWidgets, configure with `-DCVCASCADE_BUILD_GUI=OFF`. The CI pipeline installs wxWidgets and compiles the GUI target as part of the normal build.
 
 If Conan reports another generated toolchain path, use the path printed by Conan. CI installs OCCT and OpenCV from Ubuntu packages to avoid building unrelated optional GUI/media dependencies through Conan. The Conan recipe still supports Conan-managed OpenCV for normal builds.
 
