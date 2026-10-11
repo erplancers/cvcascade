@@ -251,7 +251,10 @@ std::size_t append_dense_stereo_mesh(
 
             const cv::Mat rectified_point = (cv::Mat_<double>(3, 1) << point[0], point[1], point[2]);
             const cv::Mat camera_point = rectified_to_camera * rectified_point;
-            const cv::Mat world_point = stats.applied_scale_factor *
+            const double output_scale = options.scale_reference_mm > 0.0 &&
+                options.scale_reference_units > 0.0
+                ? options.scale_reference_mm / options.scale_reference_units : 1.0;
+            const cv::Mat world_point = output_scale *
                 (camera_to_world_rotation * camera_point + camera_to_world_translation);
             const double wx = world_point.at<double>(0), wy = world_point.at<double>(1), wz = world_point.at<double>(2);
             if (!std::isfinite(wx) || !std::isfinite(wy) || !std::isfinite(wz)) continue;
