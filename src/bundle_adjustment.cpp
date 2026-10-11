@@ -292,11 +292,6 @@ BundleAdjustmentReport optimize_global_bundle(
                 candidate_cameras[ci].translation.at<double>(axis) += dc.at<double>(base + 3 + axis);
             }
         }
-        // Monocular reprojection alone has a scale gauge. Preserve the initial
-        // first-baseline length while allowing its direction to refine.
-        const double candidate_baseline = cv::norm(candidate_cameras[1].translation);
-        if (candidate_baseline > 1e-12)
-            candidate_cameras[1].translation *= fixed_baseline / candidate_baseline;
         for (std::size_t pi = 0; pi < point_normals.size(); ++pi) {
             if (point_inverse[pi].empty()) continue;
             cv::Mat gradient = point_normals[pi].g.clone();
@@ -308,6 +303,20 @@ BundleAdjustmentReport optimize_global_bundle(
             candidate_points[pi].x += dp.at<double>(0);
             candidate_points[pi].y += dp.at<double>(1);
             candidate_points[pi].z += dp.at<double>(2);
+        }
+        // Monocular reprojection has a scale gauge. Apply one common scale to
+        // every free camera translation and landmark, preserving projections
+        // while pinning the first baseline to its initial length.
+        const double candidate_baseline = cv::norm(candidate_cameras[1].translation);
+        if (candidate_baseline > 1e-12) {
+            const double gauge_scale = fixed_baseline / candidate_baseline;
+            for (std::size_t ci = 1; ci < candidate_cameras.size(); ++ci)
+                candidate_cameras[ci].translation *= gauge_scale;
+            for (auto& point : candidate_points) {
+                point.x *= gauge_scale;
+                point.y *= gauge_scale;
+                point.z *= gauge_scale;
+            }
         }
 
         const double candidate_cost = total_cost(k, tracks, candidate_cameras,
