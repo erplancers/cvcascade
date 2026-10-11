@@ -119,10 +119,23 @@ std::vector<FeatureTrack> build_shared_feature_tracks(
             if (descriptors[j].empty()) continue;
             std::vector<std::vector<cv::DMatch>> candidates;
             matcher.knnMatch(descriptors[i], descriptors[j], candidates, 2);
+            std::vector<cv::DMatch> ratio_matches;
+            std::vector<cv::Point2f> source_points, target_points;
             for (const auto& pair : candidates) {
                 if (pair.size() < 2 || pair[0].distance >= ratio_threshold * pair[1].distance) continue;
-                sets.join(offsets[i] + static_cast<std::size_t>(pair[0].queryIdx),
-                          offsets[j] + static_cast<std::size_t>(pair[0].trainIdx));
+                ratio_matches.push_back(pair[0]);
+                source_points.push_back(keypoints[i][pair[0].queryIdx].pt);
+                target_points.push_back(keypoints[j][pair[0].trainIdx].pt);
+            }
+            if (ratio_matches.size() < 8) continue;
+            cv::Mat inlier_mask;
+            cv::findFundamentalMat(source_points, target_points, cv::FM_RANSAC, 2.0, 0.995, inlier_mask);
+            if (inlier_mask.empty()) continue;
+            for (std::size_t m = 0; m < ratio_matches.size(); ++m) {
+                if (inlier_mask.at<unsigned char>(static_cast<int>(m)) == 0) continue;
+                const auto& match = ratio_matches[m];
+                sets.join(offsets[i] + static_cast<std::size_t>(match.queryIdx),
+                          offsets[j] + static_cast<std::size_t>(match.trainIdx));
             }
         }
     }
@@ -183,6 +196,9 @@ BundleAdjustmentReport optimize_global_bundle(
     double damping = options.initial_damping;
     const std::size_t variable_cameras = cameras.size() - 1; // camera 0 anchors the gauge
     const int camera_dofs = static_cast<int>(variable_cameras * 6);
+    const double fixed_baseline = cv::norm(cameras[1].translation);
+    if (!(fixed_baseline > 1e-12))
+        throw std::invalid_argument("camera 1 must have a non-zero baseline to fix monocular scale");
 
     for (int iteration = 0; iteration < options.max_iterations; ++iteration) {
         cv::Mat hcc = cv::Mat::zeros(camera_dofs, camera_dofs, CV_64F);
@@ -276,6 +292,11 @@ BundleAdjustmentReport optimize_global_bundle(
                 candidate_cameras[ci].translation.at<double>(axis) += dc.at<double>(base + 3 + axis);
             }
         }
+        // Monocular reprojection alone has a scale gauge. Preserve the initial
+        // first-baseline length while allowing its direction to refine.
+        const double candidate_baseline = cv::norm(candidate_cameras[1].translation);
+        if (candidate_baseline > 1e-12)
+            candidate_cameras[1].translation *= fixed_baseline / candidate_baseline;
         for (std::size_t pi = 0; pi < point_normals.size(); ++pi) {
             if (point_inverse[pi].empty()) continue;
             cv::Mat gradient = point_normals[pi].g.clone();
