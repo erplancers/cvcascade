@@ -46,6 +46,11 @@ struct ReconstructionStats {
     std::size_t images = 0;
     std::size_t registered_pairs = 0;
     std::size_t feature_matches = 0;
+    std::size_t shared_tracks = 0;
+    std::size_t bundle_observations = 0;
+    std::size_t bundle_iterations = 0;
+    double bundle_initial_rmse = 0.0;
+    double bundle_final_rmse = 0.0;
     std::size_t pose_inliers = 0;
     std::size_t vertices = 0;
     std::size_t triangles = 0;
