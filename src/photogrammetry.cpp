@@ -308,12 +308,11 @@ std::size_t append_dense_stereo_mesh(
         quality_triangles.push_back({static_cast<std::size_t>(triangle[0] - 1),
                                      static_cast<std::size_t>(triangle[1] - 1),
                                      static_cast<std::size_t>(triangle[2] - 1)});
-    topology_report = analyze_mesh_topology(quality_vertices, quality_triangles);
-    const std::size_t original_faces = quality_triangles.size();
-    quality_triangles.erase(std::unique(quality_triangles.begin(), quality_triangles.end()),
-                            quality_triangles.end());
+    const MeshTopologyReport before_repair =
+        analyze_mesh_topology(quality_vertices, quality_triangles);
     topology_report = repair_mesh_topology(quality_vertices, quality_triangles);
-    topology_report.duplicate_faces += original_faces - quality_triangles.size();
+    topology_report.degenerate_faces = before_repair.degenerate_faces;
+    topology_report.duplicate_faces = before_repair.duplicate_faces;
     vertices.clear();
     vertices.reserve(quality_vertices.size());
     for (const auto& vertex : quality_vertices) vertices.emplace_back(vertex.x, vertex.y, vertex.z);
