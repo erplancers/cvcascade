@@ -754,8 +754,12 @@ ReconstructionStats reconstruct_multiview(
         const std::size_t landmark_id = bundle_landmarks.size();
         bundle_landmarks.push_back(point);
         FeatureTrack accepted;
-        for (const auto& observation : track.observations)
-            accepted.observations.push_back({observation.camera_index, landmark_id, observation.pixel});
+        for (const auto& observation : track.observations) {
+            std::vector<cv::Point2d> raw{observation.pixel}, undistorted;
+            cv::undistortPoints(raw, undistorted, camera.camera_matrix,
+                                camera.distortion_coefficients, cv::noArray(), camera.camera_matrix);
+            accepted.observations.push_back({observation.camera_index, landmark_id, undistorted.front()});
+        }
         bundle_tracks.push_back(std::move(accepted));
     }
     if (bundle_tracks.size() >= 8 && bundle_landmarks.size() >= 8) {
