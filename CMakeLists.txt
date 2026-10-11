@@ -75,6 +75,10 @@ if(CVCASCADE_BUILD_TESTS)
   target_link_libraries(cvcascade_mesh_topology_tests PRIVATE cvcascade_core)
   add_test(NAME mesh_topology_unit COMMAND cvcascade_mesh_topology_tests)
 
+  add_executable(cvcascade_accuracy_benchmark tests/reconstruction_accuracy_benchmark.cpp)
+  target_link_libraries(cvcascade_accuracy_benchmark PRIVATE cvcascade_core)
+  add_test(NAME synthetic_reconstruction_accuracy COMMAND cvcascade_accuracy_benchmark)
+
   add_test(NAME cli_help COMMAND cvcascade --help)
   set_tests_properties(cli_help PROPERTIES PASS_REGULAR_EXPRESSION "--point-cloud")
 endif()
