@@ -4,6 +4,8 @@
 #include <opencv2/imgproc.hpp>
 #include <cmath>
 #include <iostream>
+#include <algorithm>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -110,6 +112,26 @@ int main() {
         const double point_rmse = std::sqrt(squared_3d / landmarks.size());
         std::cout << "recovered_geometry_rmse=" << point_rmse << "\n";
         require(point_rmse < 0.12, "recovered 3-D geometry RMSE exceeded 0.12 scene units");
+        auto bounds = [](const std::vector<cv::Point3d>& points) {
+            cv::Point3d low(std::numeric_limits<double>::infinity(),
+                            std::numeric_limits<double>::infinity(),
+                            std::numeric_limits<double>::infinity());
+            cv::Point3d high(-low.x, -low.y, -low.z);
+            for (const auto& p : points) {
+                low.x = std::min(low.x, p.x); low.y = std::min(low.y, p.y); low.z = std::min(low.z, p.z);
+                high.x = std::max(high.x, p.x); high.y = std::max(high.y, p.y); high.z = std::max(high.z, p.z);
+            }
+            return high - low;
+        };
+        const auto truth_dimensions = bounds(ground_truth);
+        const auto recovered_dimensions = bounds(landmarks);
+        const double dimension_error = std::max({
+            std::abs(truth_dimensions.x - recovered_dimensions.x),
+            std::abs(truth_dimensions.y - recovered_dimensions.y),
+            std::abs(truth_dimensions.z - recovered_dimensions.z)});
+        std::cout << "recovered_mesh_vertex_rmse=" << point_rmse << "\\n"
+                  << "max_mesh_dimension_error=" << dimension_error << "\\n";
+        require(dimension_error < 0.20, "recovered mesh dimension error exceeded 0.20 scene units");
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "GLOBAL BA TEST FAILURE: " << e.what() << "\n";
