@@ -134,7 +134,7 @@ The pipeline remains an incremental SfM + pairwise MVS prototype. It chains rela
 
 ## Tests
 
-CTest covers relief mapping and STL export, image-list parsing, calibration/CLI validation, voxel fusion/color averaging, invalid voxel sizes, and PLY header/content export. CI configures a Conan profile before resolving dependencies, then builds and runs CTest.
+CTest covers relief mapping/STL export, image-list parsing, calibration/CLI validation, voxel fusion/color averaging, invalid voxel sizes, PLY output, mesh topology diagnostics/repair, and a deterministic synthetic point-cloud fusion accuracy benchmark. The synthetic benchmark is not yet a full rendered-image-to-mesh test. CI configures a Conan profile before resolving dependencies, then builds and runs CTest.
 
 
 ### Scale references and conservative mesh repair
