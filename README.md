@@ -5,14 +5,14 @@ A C++20 command-line photogrammetry prototype using **OpenCV** for image process
 ## Capabilities
 
 - **Single-image relief:** brightness-driven height mapping for bas-reliefs and lithophanes.
-- **Camera calibration:** chessboard-based intrinsics and lens-distortion calibration.
+- **Camera calibration:** chessboard-based intrinsics and lens-distortion calibration, with the SB detector as a fallback and robust median/MAD rejection of grossly inconsistent views.
 - **Incremental multi-view reconstruction:** ORB feature matching, RANSAC essential-matrix estimation, relative pose recovery and chained camera poses.
 - **Bidirectional stereo consistency:** computes forward and reverse SGBM disparity and rejects ambiguous matches.
 - **Speckle/outlier suppression:** disparity speckle filtering, max-depth rejection and relative depth discontinuity rejection before surface triangulation.
 - **Dense colored point cloud:** optional RGB PLY export from the rectified source images.
 - **Voxel-grid fusion:** deterministic voxel downsampling that averages point coordinates and colors to reduce duplicate samples across adjacent stereo pairs.
 - **wxWidgets desktop GUI:** graphical workflows for relief generation, camera calibration, and reconstruction with browse dialogs, image preview, adjustable parameters, background execution, progress indicator, logs, and result summaries.
-- **Reconstruction quality report:** reports feature matches/inliers, pose inlier ratio, valid-depth ratio, stereo consistency counts and mesh size.
+- **Reconstruction quality report:** console metrics plus optional machine-readable JSON output (`--report report.json`) with feature matches/inliers, pose inlier ratio, valid-depth ratio, stereo consistency counts, mesh size, and scale status.
 
 ## Dependencies and cross-platform build
 
@@ -88,7 +88,7 @@ Use images from the **same camera and resolution**. Capture 5-15 varied views of
   --board-cols 9 --board-rows 6 --square-size-mm 25
 ```
 
-The calibration file stores the camera matrix, distortion coefficients, image dimensions and reprojection RMS. Use your board's actual inner-corner layout and square size.
+The calibration file stores the camera matrix, distortion coefficients, image dimensions, reprojection RMS, and counts of accepted/rejected calibration views. CVCascade tries OpenCV's more robust SB chessboard detector first, then falls back to the classic detector. After an initial fit, it rejects gross per-view reprojection outliers using a median/MAD threshold when at least three views can be retained. Use your board's actual inner-corner layout and square size.
 
 ## 3. Multi-view photogrammetry, dense stereo and fusion
 
@@ -111,10 +111,10 @@ Export both a mesh and a colored, voxel-fused PLY point cloud:
   --max-dimension 640 --num-disparities 128 --block-size 5 \
   --min-inliers 30 --lr-tolerance 1.5 \
   --speckle-window 100 --speckle-range 2 \
-  --fusion-voxel 2.0 --depth-jump 0.20
+  --fusion-voxel 2.0 --depth-jump 0.20 --report reconstruction-report.json
 ```
 
-The console report includes the number of feature matches and pose inliers, mean inlier ratio, average valid-depth ratio, left-right stereo consistency, rejected stereo candidates, mesh vertices/triangles and fused point count.
+The console report includes the number of feature matches and pose inliers, mean inlier ratio, average valid-depth ratio, left-right stereo consistency, rejected stereo candidates, mesh vertices/triangles and fused point count. `--report reconstruction-report.json` writes these metrics and the output paths to JSON for automated quality tracking.
 
 ### Reconstruction options
 
