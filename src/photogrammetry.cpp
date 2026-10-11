@@ -635,6 +635,8 @@ ReconstructionStats reconstruct_multiview(
         !(options.scale_reference_units > 0.0) || !std::isfinite(options.scale_reference_mm) ||
         !std::isfinite(options.scale_reference_units)))
         throw std::invalid_argument("scale reference requires positive finite --scale-reference-mm and --scale-reference-units");
+    if (has_scale_reference && options.baseline_mm > 0.0)
+        throw std::invalid_argument("use either --baseline-mm or the scale-reference pair, not both");
     if (options.min_fusion_observations == 0)
         throw std::invalid_argument("minimum fusion observations must be at least one");
     if (!(options.max_depth > 0.0) || !std::isfinite(options.max_depth))
