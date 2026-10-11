@@ -1,4 +1,5 @@
 #include "cvcascade/photogrammetry.hpp"
+#include "cvcascade/bundle_adjustment.hpp"
 #include "cvcascade/mesh_topology.hpp"
 
 #include <BRep_Builder.hxx>
@@ -705,6 +706,80 @@ ReconstructionStats reconstruct_multiview(
         inlier_ratio_sum += static_cast<double>(pose.inliers) /
             static_cast<double>(std::max<std::size_t>(1, pose.good_matches));
         pair_poses.push_back(std::move(pose));
+    }
+    // Build persistent tracks across all views, triangulate shared landmarks in the
+    // chained-pose initialization, then jointly refine every camera and landmark.
+    const auto raw_tracks = build_shared_feature_tracks(images, 0.75, 2);
+    std::vector<BundleCamera> bundle_cameras(images.size());
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        cv::Rodrigues(camera_rotations[i], bundle_cameras[i].rotation_vector);
+        bundle_cameras[i].translation = camera_translations[i].clone();
+    }
+    std::vector<FeatureTrack> bundle_tracks;
+    std::vector<cv::Point3d> bundle_landmarks;
+    bundle_tracks.reserve(raw_tracks.size());
+    std::vector<cv::Mat> projections(images.size());
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        cv::Mat extrinsic;
+        cv::hconcat(camera_rotations[i], camera_translations[i], extrinsic);
+        projections[i] = camera.camera_matrix * extrinsic;
+    }
+    for (const auto& track : raw_tracks) {
+        if (track.observations.size() < 2) continue;
+        const auto& first = track.observations.front();
+        const auto& last = track.observations.back();
+        std::vector<cv::Point2d> first_pixel{first.pixel}, last_pixel{last.pixel};
+        std::vector<cv::Point2d> first_undistorted, last_undistorted;
+        cv::undistortPoints(first_pixel, first_undistorted, camera.camera_matrix,
+                            camera.distortion_coefficients, cv::noArray(), camera.camera_matrix);
+        cv::undistortPoints(last_pixel, last_undistorted, camera.camera_matrix,
+                            camera.distortion_coefficients, cv::noArray(), camera.camera_matrix);
+        cv::Mat homogeneous;
+        cv::triangulatePoints(projections[first.camera_index], projections[last.camera_index],
+                              first_undistorted, last_undistorted, homogeneous);
+        const double w = homogeneous.at<double>(3, 0);
+        if (!std::isfinite(w) || std::abs(w) < 1e-10) continue;
+        const cv::Point3d point(homogeneous.at<double>(0, 0) / w,
+                                homogeneous.at<double>(1, 0) / w,
+                                homogeneous.at<double>(2, 0) / w);
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
+        bool visible = true;
+        for (const auto& observation : track.observations) {
+            const cv::Mat camera_point = camera_rotations[observation.camera_index] *
+                (cv::Mat_<double>(3, 1) << point.x, point.y, point.z) +
+                camera_translations[observation.camera_index];
+            if (!(camera_point.at<double>(2) > 0.0)) { visible = false; break; }
+        }
+        if (!visible) continue;
+        const std::size_t landmark_id = bundle_landmarks.size();
+        bundle_landmarks.push_back(point);
+        FeatureTrack accepted;
+        for (const auto& observation : track.observations)
+            accepted.observations.push_back({observation.camera_index, landmark_id, observation.pixel});
+        bundle_tracks.push_back(std::move(accepted));
+    }
+    if (bundle_tracks.size() >= 8 && bundle_landmarks.size() >= 8) {
+        BundleAdjustmentOptions ba_options;
+        ba_options.max_iterations = 12;
+        const auto ba = optimize_global_bundle(camera.camera_matrix, bundle_tracks,
+                                               bundle_cameras, bundle_landmarks, ba_options);
+        stats.shared_tracks = ba.tracks;
+        stats.bundle_observations = ba.observations;
+        stats.bundle_initial_rmse = ba.initial_rmse;
+        stats.bundle_final_rmse = ba.final_rmse;
+        stats.bundle_iterations = static_cast<std::size_t>(std::max(0, ba.iterations));
+        for (std::size_t i = 0; i < images.size(); ++i) {
+            cv::Rodrigues(bundle_cameras[i].rotation_vector, camera_rotations[i]);
+            camera_translations[i] = bundle_cameras[i].translation.clone();
+        }
+        // Recompute each relative pose from globally optimized world-to-camera poses.
+        for (std::size_t i = 0; i < pair_poses.size(); ++i) {
+            pair_poses[i].rotation = camera_rotations[i + 1] * camera_rotations[i].t();
+            pair_poses[i].translation = camera_translations[i + 1] -
+                pair_poses[i].rotation * camera_translations[i];
+        }
+    } else {
+        throw std::runtime_error("global bundle adjustment could not initialize: too few valid shared multi-view tracks");
     }
     stats.mean_pose_inlier_ratio = inlier_ratio_sum / static_cast<double>(pair_poses.size());
 
