@@ -133,7 +133,7 @@ int main() {
         const double variance_z = std::max(0.0, sum_z2 / count - mean_z * mean_z);
         const double z_stddev = std::sqrt(variance_z);
         const double depth_error = std::abs(mean_z - plane_z_mm);
-        const double x_span = max_x - min_x, y_span = max_y - min_y;
+        const double reconstructed_x_extent = max_x - min_x, reconstructed_y_extent = max_y - min_y;
         std::cout << "Deterministic rendered camera-to-mesh benchmark\n"
                   << "images=" << stats.images << "\n"
                   << "shared_tracks=" << stats.shared_tracks << "\n"
@@ -144,10 +144,10 @@ int main() {
                   << "reconstructed_mean_depth_mm=" << mean_z << "\n"
                   << "depth_error_mm=" << depth_error << "\n"
                   << "plane_depth_stddev_mm=" << z_stddev << "\n"
-                  << "point_cloud_xy_span_mm=" << x_span << " x " << y_span << "\n";
+                  << "point_cloud_xy_span_mm=" << reconstructed_x_extent << " x " << reconstructed_y_extent << "\n";
         require(depth_error < 1200.0, "reconstructed plane mean depth error exceeded 1200 mm");
         require(z_stddev < 1200.0, "reconstructed plane depth spread exceeded 1200 mm");
-        require(x_span > 1500.0 && y_span > 1000.0,
+        require(reconstructed_x_extent > 1500.0 && reconstructed_y_extent > 1000.0,
                 "reconstructed plane extent is implausibly small");
         fs::remove_all(root);
         return 0;
