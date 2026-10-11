@@ -53,6 +53,10 @@ void write_reconstruction_report(const std::string& path,
         << "  \"stereo_rejected\": " << stats.stereo_rejected << ",\n"
         << "  \"vertices\": " << stats.vertices << ",\n"
         << "  \"triangles\": " << stats.triangles << ",\n"
+        << "  \"mesh_boundary_edges\": " << stats.mesh_boundary_edges << ",\n"
+        << "  \"mesh_non_manifold_edges\": " << stats.mesh_non_manifold_edges << ",\n"
+        << "  \"mesh_degenerate_faces_removed\": " << stats.mesh_degenerate_faces_removed << ",\n"
+        << "  \"mesh_duplicate_faces_removed\": " << stats.mesh_duplicate_faces_removed << ",\n"
         << "  \"fused_points\": " << stats.fused_points << ",\n"
         << "  \"metric_scale\": " << (stats.metric_scale ? "true" : "false") << ",\n"
         << "  \"applied_scale_factor\": " << stats.applied_scale_factor << "\n"
@@ -179,6 +183,10 @@ int main(int argc, char** argv) {
                       << "\nRejected by stereo consistency: " << stats.stereo_rejected
                       << "\nMesh vertices: " << stats.vertices
                       << "\nMesh triangles: " << stats.triangles
+                      << "\nMesh boundary edges (per reconstructed patch): " << stats.mesh_boundary_edges
+                      << "\nMesh non-manifold edges (per reconstructed patch): " << stats.mesh_non_manifold_edges
+                      << "\nDegenerate faces rejected: " << stats.mesh_degenerate_faces_removed
+                      << "\nDuplicate faces rejected: " << stats.mesh_duplicate_faces_removed
                       << "\nScale: " << (stats.metric_scale ? "metric scale requested (validate against a known dimension)" : "arbitrary monocular scale")
                       << "\nApplied scale factor: " << stats.applied_scale_factor
                       << "\n";
