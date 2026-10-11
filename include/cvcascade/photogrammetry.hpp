@@ -22,10 +22,13 @@ struct PhotogrammetryOptions {
     int block_size = 5;
     int min_inliers = 30;
     double baseline_mm = 0.0;
+    double scale_reference_mm = 0.0;
+    double scale_reference_units = 0.0;
     double max_depth = 10000.0;
     double max_relative_depth_jump = 0.20;
     double left_right_tolerance = 1.5;
     double fusion_voxel_size = 2.0;
+    std::size_t min_fusion_observations = 1;
     int speckle_window_size = 100;
     int speckle_range = 2;
 };
@@ -50,6 +53,8 @@ struct ReconstructionStats {
     std::size_t stereo_consistent = 0;
     std::size_t stereo_rejected = 0;
     std::size_t fused_points = 0;
+    std::size_t fusion_voxels_rejected = 0;
+    double applied_scale_factor = 1.0;
     double mean_pose_inlier_ratio = 0.0;
     double mean_valid_depth_ratio = 0.0;
     bool metric_scale = false;
