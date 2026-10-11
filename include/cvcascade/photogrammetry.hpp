@@ -49,6 +49,10 @@ struct ReconstructionStats {
     std::size_t pose_inliers = 0;
     std::size_t vertices = 0;
     std::size_t triangles = 0;
+    std::size_t mesh_boundary_edges = 0;
+    std::size_t mesh_non_manifold_edges = 0;
+    std::size_t mesh_degenerate_faces_removed = 0;
+    std::size_t mesh_duplicate_faces_removed = 0;
     std::size_t stereo_candidates = 0;
     std::size_t stereo_consistent = 0;
     std::size_t stereo_rejected = 0;
