@@ -6,7 +6,7 @@ A C++20 command-line photogrammetry prototype using **OpenCV** for image process
 
 - **Single-image relief:** brightness-driven height mapping for bas-reliefs and lithophanes.
 - **Camera calibration:** chessboard-based intrinsics and lens-distortion calibration, with the SB detector as a fallback and robust median/MAD rejection of grossly inconsistent views.
-- **Incremental multi-view reconstruction:** ORB feature matching, RANSAC essential-matrix estimation, relative pose recovery and chained camera poses.
+- **Multi-view reconstruction:** ORB feature matching, RANSAC essential-matrix initialization, persistent cross-view feature tracks, triangulated shared landmarks, and robust global bundle adjustment using a damped Schur-complement solver.
 - **Bidirectional stereo consistency:** computes forward and reverse SGBM disparity and rejects ambiguous matches.
 - **Speckle/outlier suppression:** disparity speckle filtering, max-depth rejection and relative depth discontinuity rejection before surface triangulation.
 - **Dense colored point cloud:** optional RGB PLY export from the rectified source images.
@@ -130,11 +130,11 @@ The console report includes the number of feature matches and pose inliers, mean
 - `--point-cloud cloud.ply`: additionally export an ASCII PLY with RGB colors.
 - `--fusion-voxel N`: voxel size for point-cloud downsampling/fusion. Units are millimetres only when the supplied baseline genuinely defines metric scale; otherwise they are arbitrary model units.
 
-The pipeline remains an incremental SfM + pairwise MVS prototype. It chains relative poses and appends pairwise triangulated surfaces into an OCCT compound. Voxel fusion currently applies to the optional point cloud, not to the STL mesh. It does **not** yet include global bundle adjustment, loop closure, global depth-map fusion, texture baking, or watertight mesh repair. Pairwise poses can accumulate drift; setting `--baseline-mm` is metrically meaningful only when each adjacent pair really uses that baseline. Glossy, textureless, moving, or poorly lit scenes remain difficult.
+The pipeline now initializes poses incrementally, merges ORB correspondences across all image pairs into persistent tracks, triangulates shared landmarks, and jointly refines camera poses and landmarks by robust global bundle adjustment. Camera 0 anchors the world frame and the first baseline length fixes monocular scale. The dense surfaces are still produced pairwise and appended into an OCCT compound; voxel fusion applies to the optional point cloud, not to the STL mesh. Loop-closure pose-graph optimization, global depth-map fusion, texture baking, and watertight mesh repair are still outstanding. Initialization errors or weak tracks can still cause drift; setting `--baseline-mm` is metrically meaningful only when each adjacent pair really uses that baseline. Glossy, textureless, moving, or poorly lit scenes remain difficult.
 
 ## Tests
 
-CTest covers relief mapping/STL export, image-list parsing, calibration/CLI validation, voxel fusion/color averaging, invalid voxel sizes, PLY output, mesh topology diagnostics/repair, and a deterministic synthetic point-cloud fusion accuracy benchmark. The synthetic benchmark is not yet a full rendered-image-to-mesh test. CI configures a Conan profile before resolving dependencies, then builds and runs CTest.
+CTest covers relief mapping/STL export, image-list parsing, calibration/CLI validation, voxel fusion/color averaging, PLY output, mesh topology diagnostics/repair, global bundle-adjustment convergence, and a deterministic calibrated rendered-scene geometry benchmark with known 3-D landmarks and camera poses. The rendered-scene test currently validates the shared-landmark optimization and recovered geometry; it does not yet exercise the entire image-feature-to-dense-stereo-to-STL pipeline end to end. CI configures a Conan profile before resolving dependencies, then builds and runs CTest.
 
 
 ### Scale references and conservative mesh repair
