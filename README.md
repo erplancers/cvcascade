@@ -135,3 +135,20 @@ The pipeline remains an incremental SfM + pairwise MVS prototype. It chains rela
 ## Tests
 
 CTest covers relief mapping and STL export, image-list parsing, calibration/CLI validation, voxel fusion/color averaging, invalid voxel sizes, and PLY header/content export. CI configures a Conan profile before resolving dependencies, then builds and runs CTest.
+
+
+### Scale references and conservative mesh repair
+
+For a model reconstructed at arbitrary monocular scale, provide a known distance and the same distance measured in the unscaled reconstruction:
+
+```bash
+cvcascade --reconstruct --images views.txt --calibration camera.yml --output model.stl \
+  --scale-reference-mm 120 --scale-reference-units 3.84 \
+  --point-cloud cloud.ply --min-fusion-observations 2 --report report.json
+```
+
+The scale factor is `known distance in mm / measured distance in current model units`. The current CLI expects the user to measure the corresponding 3D landmark separation in the unscaled reconstruction; it does not yet provide interactive landmark picking. Do not combine this option with `--baseline-mm`. Always validate at least one independent known dimension after scaling.
+
+Voxel fusion can require multiple samples per voxel with `--min-fusion-observations N`, helping discard isolated one-view samples. Choose N according to overlap and scene coverage; too high a value removes legitimate surfaces.
+
+Before a generated mesh patch is handed to Open CASCADE, CVCascade now detects invalid-index/non-finite/zero-area and duplicate faces, removes them conservatively, compacts unused vertices, and reports boundary/non-manifold edges. Boundary edges are expected on partial stereo patches; this repair does **not** fill holes or guarantee a watertight mesh. Topology utilities are covered by a deterministic unit test.
