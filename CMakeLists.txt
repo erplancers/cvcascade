@@ -16,6 +16,7 @@ find_package(OpenCASCADE CONFIG REQUIRED)
 add_library(cvcascade_core
   src/mesh_builder.cpp
   src/photogrammetry.cpp
+  src/bundle_adjustment.cpp
   src/mesh_topology.cpp
 )
 target_include_directories(cvcascade_core PUBLIC include)
