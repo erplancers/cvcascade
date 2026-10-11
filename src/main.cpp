@@ -45,6 +45,11 @@ void write_reconstruction_report(const std::string& path,
         << "  \"images\": " << stats.images << ",\n"
         << "  \"registered_pairs\": " << stats.registered_pairs << ",\n"
         << "  \"feature_matches\": " << stats.feature_matches << ",\n"
+        << "  \"shared_tracks\": " << stats.shared_tracks << ",\n"
+        << "  \"bundle_observations\": " << stats.bundle_observations << ",\n"
+        << "  \"bundle_iterations\": " << stats.bundle_iterations << ",\n"
+        << "  \"bundle_initial_rmse_px\": " << stats.bundle_initial_rmse << ",\n"
+        << "  \"bundle_final_rmse_px\": " << stats.bundle_final_rmse << ",\n"
         << "  \"pose_inliers\": " << stats.pose_inliers << ",\n"
         << "  \"mean_pose_inlier_ratio\": " << stats.mean_pose_inlier_ratio << ",\n"
         << "  \"mean_valid_depth_ratio\": " << stats.mean_valid_depth_ratio << ",\n"
@@ -174,6 +179,11 @@ int main(int argc, char** argv) {
                       << "\nImages: " << stats.images
                       << "\nDense stereo pairs with triangles: " << stats.registered_pairs
                       << "\nRatio-filtered feature matches: " << stats.feature_matches
+                      << "\nShared multi-view tracks: " << stats.shared_tracks
+                      << "\nBundle observations: " << stats.bundle_observations
+                      << "\nBundle adjustment iterations: " << stats.bundle_iterations
+                      << "\nBundle reprojection RMSE: " << stats.bundle_initial_rmse
+                      << " -> " << stats.bundle_final_rmse << " px"
                       << "\nPose inliers: " << stats.pose_inliers
                       << "\nMean pose inlier ratio: " << stats.mean_pose_inlier_ratio
                       << "\nMean valid depth ratio: " << stats.mean_valid_depth_ratio
