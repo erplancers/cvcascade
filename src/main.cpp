@@ -3,6 +3,8 @@
 
 #include <opencv2/imgcodecs.hpp>
 #include <iostream>
+#include <fstream>
+#include <iomanip>
 #include <stdexcept>
 #include <string>
 
@@ -11,6 +13,52 @@
 #endif
 
 namespace {
+std::string json_escape(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    for (const unsigned char ch : value) {
+        switch (ch) {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (ch < 0x20) escaped += '?';
+                else escaped += static_cast<char>(ch);
+        }
+    }
+    return escaped;
+}
+
+void write_reconstruction_report(const std::string& path,
+                                 const cvcascade::ReconstructionStats& stats,
+                                 const std::string& mesh_path,
+                                 const std::string& cloud_path) {
+    if (path.empty()) return;
+    std::ofstream out(path);
+    if (!out) throw std::runtime_error("cannot write reconstruction report: " + path);
+    out << std::setprecision(10)
+        << "{\n"
+        << "  \"mesh\": \"" << json_escape(mesh_path) << "\",\n"
+        << "  \"point_cloud\": \"" << json_escape(cloud_path) << "\",\n"
+        << "  \"images\": " << stats.images << ",\n"
+        << "  \"registered_pairs\": " << stats.registered_pairs << ",\n"
+        << "  \"feature_matches\": " << stats.feature_matches << ",\n"
+        << "  \"pose_inliers\": " << stats.pose_inliers << ",\n"
+        << "  \"mean_pose_inlier_ratio\": " << stats.mean_pose_inlier_ratio << ",\n"
+        << "  \"mean_valid_depth_ratio\": " << stats.mean_valid_depth_ratio << ",\n"
+        << "  \"stereo_candidates\": " << stats.stereo_candidates << ",\n"
+        << "  \"stereo_consistent\": " << stats.stereo_consistent << ",\n"
+        << "  \"stereo_rejected\": " << stats.stereo_rejected << ",\n"
+        << "  \"vertices\": " << stats.vertices << ",\n"
+        << "  \"triangles\": " << stats.triangles << ",\n"
+        << "  \"fused_points\": " << stats.fused_points << ",\n"
+        << "  \"metric_scale\": " << (stats.metric_scale ? "true" : "false") << "\n"
+        << "}\n";
+    if (!out) throw std::runtime_error("failed while writing reconstruction report: " + path);
+}
+
 void usage(std::ostream& out) {
     out << "cvcascade - OpenCV + Open CASCADE image reconstruction\n"
         << "\nRelief from one photograph:\n"
@@ -21,7 +69,7 @@ void usage(std::ostream& out) {
         << "            --board-cols N --board-rows N --square-size-mm MM\n"
         << "\nMulti-view reconstruction:\n"
         << "  cvcascade --reconstruct --images views.txt --calibration camera.yml --output model.stl\n"
-        << "            [--point-cloud cloud.ply] [--fusion-voxel N] [--lr-tolerance PX]\n"
+        << "            [--point-cloud cloud.ply] [--report report.json] [--fusion-voxel N] [--lr-tolerance PX]\n"
         << "            [--speckle-window N] [--speckle-range N] [--max-dimension N]\n"
         << "            [--num-disparities N] [--block-size N] [--min-inliers N]\n"
         << "            [--baseline-mm MM] [--max-depth N] [--depth-jump RATIO]\n"
@@ -33,7 +81,7 @@ void usage(std::ostream& out) {
 
 int main(int argc, char** argv) {
     try {
-        std::string input, output, image_list, calibration_path, point_cloud_path;
+        std::string input, output, image_list, calibration_path, point_cloud_path, report_path;
         cvcascade::MeshOptions mesh_options;
         cvcascade::PhotogrammetryOptions photogrammetry_options;
         bool calibrate = false, reconstruct = false;
@@ -57,6 +105,7 @@ int main(int argc, char** argv) {
             else if (arg == "--images") image_list = value("--images");
             else if (arg == "--calibration") calibration_path = value("--calibration");
             else if (arg == "--point-cloud") point_cloud_path = value("--point-cloud");
+            else if (arg == "--report") report_path = value("--report");
             else if (arg == "--calibrate") calibrate = true;
             else if (arg == "--reconstruct") reconstruct = true;
             else if (arg == "--width") mesh_options.width = std::stod(value("--width"));
