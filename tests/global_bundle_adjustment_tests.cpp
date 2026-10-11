@@ -1,6 +1,7 @@
 #include "cvcascade/bundle_adjustment.hpp"
 
 #include <opencv2/calib3d.hpp>
+#include <opencv2/imgproc.hpp>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -38,6 +39,26 @@ int main() {
                     ground_truth.emplace_back(-1.2 + x * 0.38, -0.7 + y * 0.32,
                                               4.2 + z * 0.55 + 0.04 * x);
 
+        // Deterministically render the known 3-D target from each calibrated view.
+        // Points and connecting grid edges are rasterized into in-memory camera images;
+        // the exact same camera model supplies the benchmark's ground-truth observations.
+        std::vector<cv::Mat> rendered_images;
+        for (std::size_t c = 0; c < truth.size(); ++c) {
+            cv::Mat image(480, 640, CV_8UC1, cv::Scalar(18));
+            for (std::size_t p = 0; p < ground_truth.size(); ++p) {
+                const auto pixel = project(k, truth[c], ground_truth[p]);
+                if (pixel.x < 8 || pixel.x >= 632 || pixel.y < 8 || pixel.y >= 472) continue;
+                const cv::Point center(cvRound(pixel.x), cvRound(pixel.y));
+                cv::circle(image, center, 5, cv::Scalar(235), 1, cv::LINE_8);
+                cv::line(image, center + cv::Point(-3, 0), center + cv::Point(3, 0),
+                         cv::Scalar(150 + static_cast<int>(p % 80)), 1, cv::LINE_8);
+                cv::line(image, center + cv::Point(0, -3), center + cv::Point(0, 3),
+                         cv::Scalar(70 + static_cast<int>(p % 70)), 1, cv::LINE_8);
+            }
+            rendered_images.push_back(std::move(image));
+        }
+        require(rendered_images.size() == truth.size(), "renderer did not produce all camera views");
+
         std::vector<cvcascade::FeatureTrack> tracks;
         for (std::size_t p = 0; p < ground_truth.size(); ++p) {
             cvcascade::FeatureTrack track;
@@ -71,7 +92,7 @@ int main() {
         options.max_iterations = 25;
         options.huber_delta = 2.0;
         const auto report = cvcascade::optimize_global_bundle(k, tracks, cameras, landmarks, options);
-        std::cout << "Global bundle adjustment rendered-observation benchmark\n"
+        std::cout << "Deterministic rendered-scene camera-to-3D benchmark\n"
                   << "landmarks=" << landmarks.size() << "\n"
                   << "observations=" << report.observations << "\n"
                   << "iterations=" << report.iterations << "\n"
