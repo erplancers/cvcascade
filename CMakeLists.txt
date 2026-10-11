@@ -72,6 +72,10 @@ if(CVCASCADE_BUILD_TESTS)
   target_link_libraries(cvcascade_photogrammetry_tests PRIVATE cvcascade_core)
   add_test(NAME photogrammetry_unit COMMAND cvcascade_photogrammetry_tests)
 
+  add_executable(cvcascade_global_ba_tests tests/global_bundle_adjustment_tests.cpp)
+  target_link_libraries(cvcascade_global_ba_tests PRIVATE cvcascade_core)
+  add_test(NAME global_bundle_adjustment_rendered_scene COMMAND cvcascade_global_ba_tests)
+
   add_executable(cvcascade_mesh_topology_tests tests/mesh_topology_tests.cpp)
   target_link_libraries(cvcascade_mesh_topology_tests PRIVATE cvcascade_core)
   add_test(NAME mesh_topology_unit COMMAND cvcascade_mesh_topology_tests)
