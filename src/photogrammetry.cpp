@@ -561,8 +561,8 @@ CameraModel calibrate_camera_from_list(
         kept_images.reserve(image_points.size());
         for (std::size_t i = 0; i < object_points.size(); ++i) {
             if (view_errors[i] <= threshold) {
-                kept_objects.push_back(std::move(object_points[i]));
-                kept_images.push_back(std::move(image_points[i]));
+                kept_objects.push_back(object_points[i]);
+                kept_images.push_back(image_points[i]);
             }
         }
         if (kept_objects.size() >= 3 && kept_objects.size() < object_points.size()) {
