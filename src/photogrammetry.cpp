@@ -1,4 +1,5 @@
 #include "cvcascade/photogrammetry.hpp"
+#include "cvcascade/mesh_topology.hpp"
 
 #include <BRep_Builder.hxx>
 #include <Poly_Triangle.hxx>
@@ -165,7 +166,8 @@ std::size_t append_dense_stereo_mesh(
     std::size_t& stereo_candidates,
     std::size_t& stereo_consistent,
     std::size_t& stereo_rejected,
-    double& valid_depth_ratio) {
+    double& valid_depth_ratio,
+    MeshTopologyReport& topology_report) {
 
     cv::Mat r1, r2, p1, p2, q;
     cv::stereoRectify(camera.camera_matrix, camera.distortion_coefficients,
@@ -291,6 +293,36 @@ std::size_t append_dense_stereo_mesh(
             triangles.push_back({a, c, d});
         }
     }
+    if (triangles.empty()) return 0;
+
+    // Validate every generated patch before handing it to Open CASCADE. Repair is
+    // intentionally conservative: it removes invalid/duplicate faces and unused
+    // vertices but never invents triangles to fill uncertain depth boundaries.
+    std::vector<cv::Point3d> quality_vertices;
+    quality_vertices.reserve(vertices.size());
+    for (const auto& vertex : vertices)
+        quality_vertices.emplace_back(vertex.X(), vertex.Y(), vertex.Z());
+    std::vector<MeshTriangle> quality_triangles;
+    quality_triangles.reserve(triangles.size());
+    for (const auto& triangle : triangles)
+        quality_triangles.push_back({static_cast<std::size_t>(triangle[0] - 1),
+                                     static_cast<std::size_t>(triangle[1] - 1),
+                                     static_cast<std::size_t>(triangle[2] - 1)});
+    topology_report = analyze_mesh_topology(quality_vertices, quality_triangles);
+    const std::size_t original_faces = quality_triangles.size();
+    quality_triangles.erase(std::unique(quality_triangles.begin(), quality_triangles.end()),
+                            quality_triangles.end());
+    topology_report = repair_mesh_topology(quality_vertices, quality_triangles);
+    topology_report.duplicate_faces += original_faces - quality_triangles.size();
+    vertices.clear();
+    vertices.reserve(quality_vertices.size());
+    for (const auto& vertex : quality_vertices) vertices.emplace_back(vertex.x, vertex.y, vertex.z);
+    triangles.clear();
+    triangles.reserve(quality_triangles.size());
+    for (const auto& triangle : quality_triangles)
+        triangles.push_back({static_cast<Standard_Integer>(triangle[0] + 1),
+                             static_cast<Standard_Integer>(triangle[1] + 1),
+                             static_cast<Standard_Integer>(triangle[2] + 1)});
     if (triangles.empty()) return 0;
 
     Handle(Poly_Triangulation) triangulation = new Poly_Triangulation(
@@ -686,13 +718,18 @@ ReconstructionStats reconstruct_multiview(
     for (std::size_t i = 0; i < pair_poses.size(); ++i) {
         const cv::Mat& color_first = output_ply.empty() ? images[i] : color_images[i];
         double valid_ratio = 0.0;
+        MeshTopologyReport topology;
         const std::size_t triangles = append_dense_stereo_mesh(
             images[i], images[i + 1], color_first, camera, pair_poses[i],
             camera_rotations[i], camera_translations[i], options,
             builder, compound, stats.vertices,
             output_ply.empty() ? nullptr : &cloud_samples,
             stats.stereo_candidates, stats.stereo_consistent, stats.stereo_rejected,
-            valid_ratio);
+            valid_ratio, topology);
+        stats.mesh_boundary_edges += topology.boundary_edges;
+        stats.mesh_non_manifold_edges += topology.non_manifold_edges;
+        stats.mesh_degenerate_faces_removed += topology.degenerate_faces;
+        stats.mesh_duplicate_faces_removed += topology.duplicate_faces;
         valid_ratio_sum += valid_ratio;
         stats.triangles += triangles;
         if (triangles > 0) ++stats.registered_pairs;
