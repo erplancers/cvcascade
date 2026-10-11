@@ -73,7 +73,8 @@ CameraModel load_camera_model(const std::filesystem::path& calibration_path);
 
 std::vector<ColoredPoint> fuse_point_cloud_voxels(
     const std::vector<ColoredPoint>& points,
-    double voxel_size);
+    double voxel_size,
+    std::size_t minimum_observations = 1);
 
 void write_ply_point_cloud(
     const std::filesystem::path& output_path,
