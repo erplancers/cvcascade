@@ -251,7 +251,8 @@ std::size_t append_dense_stereo_mesh(
 
             const cv::Mat rectified_point = (cv::Mat_<double>(3, 1) << point[0], point[1], point[2]);
             const cv::Mat camera_point = rectified_to_camera * rectified_point;
-            const cv::Mat world_point = camera_to_world_rotation * camera_point + camera_to_world_translation;
+            const cv::Mat world_point = stats.applied_scale_factor *
+                (camera_to_world_rotation * camera_point + camera_to_world_translation);
             const double wx = world_point.at<double>(0), wy = world_point.at<double>(1), wz = world_point.at<double>(2);
             if (!std::isfinite(wx) || !std::isfinite(wy) || !std::isfinite(wz)) continue;
 
@@ -334,9 +335,11 @@ struct VoxelAccum {
 } // namespace
 
 std::vector<ColoredPoint> fuse_point_cloud_voxels(
-    const std::vector<ColoredPoint>& points, double voxel_size) {
+    const std::vector<ColoredPoint>& points, double voxel_size, std::size_t minimum_observations) {
     if (!(voxel_size > 0.0) || !std::isfinite(voxel_size))
         throw std::invalid_argument("fusion voxel size must be finite and positive");
+    if (minimum_observations == 0)
+        throw std::invalid_argument("minimum fusion observations must be at least one");
 
     std::unordered_map<VoxelKey, VoxelAccum, VoxelHash> voxels;
     voxels.reserve(points.size());
@@ -368,6 +371,7 @@ std::vector<ColoredPoint> fuse_point_cloud_voxels(
     fused.reserve(voxels.size());
     for (const auto& entry : voxels) {
         const auto& voxel = entry.second;
+        if (voxel.count < minimum_observations) continue;
         const double count = static_cast<double>(voxel.count);
         fused.push_back({
             voxel.x / count, voxel.y / count, voxel.z / count,
@@ -592,6 +596,13 @@ ReconstructionStats reconstruct_multiview(
     if (options.min_inliers < 8) throw std::invalid_argument("min-inliers must be at least 8");
     if (!(options.baseline_mm >= 0.0) || !std::isfinite(options.baseline_mm))
         throw std::invalid_argument("baseline-mm must be finite and non-negative");
+    const bool has_scale_reference = options.scale_reference_mm > 0.0 || options.scale_reference_units > 0.0;
+    if (has_scale_reference && (!(options.scale_reference_mm > 0.0) ||
+        !(options.scale_reference_units > 0.0) || !std::isfinite(options.scale_reference_mm) ||
+        !std::isfinite(options.scale_reference_units)))
+        throw std::invalid_argument("scale reference requires positive finite --scale-reference-mm and --scale-reference-units");
+    if (options.min_fusion_observations == 0)
+        throw std::invalid_argument("minimum fusion observations must be at least one");
     if (!(options.max_depth > 0.0) || !std::isfinite(options.max_depth))
         throw std::invalid_argument("max-depth must be finite and positive");
     if (!(options.max_relative_depth_jump > 0.0 && options.max_relative_depth_jump <= 1.0))
@@ -639,7 +650,9 @@ ReconstructionStats reconstruct_multiview(
 
     ReconstructionStats stats;
     stats.images = images.size();
-    stats.metric_scale = options.baseline_mm > 0.0;
+    stats.metric_scale = options.baseline_mm > 0.0 || has_scale_reference;
+    stats.applied_scale_factor = has_scale_reference
+        ? options.scale_reference_mm / options.scale_reference_units : 1.0;
     double inlier_ratio_sum = 0.0;
 
     for (std::size_t i = 1; i < images.size(); ++i) {
@@ -691,7 +704,8 @@ ReconstructionStats reconstruct_multiview(
         throw std::runtime_error("Open CASCADE failed to write STL: " + output_stl.string());
 
     if (!output_ply.empty()) {
-        const auto fused = fuse_point_cloud_voxels(cloud_samples, options.fusion_voxel_size);
+        const auto fused = fuse_point_cloud_voxels(
+            cloud_samples, options.fusion_voxel_size, options.min_fusion_observations);
         if (fused.empty()) throw std::runtime_error("no points remain after dense point-cloud fusion");
         write_ply_point_cloud(output_ply, fused);
         stats.fused_points = fused.size();
