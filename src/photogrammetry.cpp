@@ -451,8 +451,14 @@ CameraModel calibrate_camera_from_list(
             throw std::runtime_error("calibration images must all have the same dimensions");
 
         std::vector<cv::Point2f> corners;
-        if (!cv::findChessboardCorners(gray, cv::Size(board_cols, board_rows), corners,
-                cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE)) continue;
+        const cv::Size board_size(board_cols, board_rows);
+        bool found = cv::findChessboardCornersSB(gray, board_size, corners,
+            cv::CALIB_CB_NORMALIZE_IMAGE | cv::CALIB_CB_EXHAUSTIVE);
+        if (!found) {
+            found = cv::findChessboardCorners(gray, board_size, corners,
+                cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE);
+        }
+        if (!found) continue;
         cv::Mat refined = gray.clone();
         cv::cornerSubPix(refined, corners, cv::Size(11, 11), cv::Size(-1, -1),
             cv::TermCriteria(cv::TermCriteria::EPS | cv::TermCriteria::COUNT, 30, 0.001));
@@ -475,9 +481,60 @@ CameraModel calibrate_camera_from_list(
     model.camera_matrix = cv::initCameraMatrix2D(object_points, image_points, image_size);
     model.distortion_coefficients = cv::Mat::zeros(8, 1, CV_64F);
     std::vector<cv::Mat> rotations, translations;
-    model.reprojection_rms = cv::calibrateCamera(
-        object_points, image_points, image_size, model.camera_matrix,
-        model.distortion_coefficients, rotations, translations);
+
+    auto calibrate = [&]() {
+        rotations.clear();
+        translations.clear();
+        model.reprojection_rms = cv::calibrateCamera(
+            object_points, image_points, image_size, model.camera_matrix,
+            model.distortion_coefficients, rotations, translations);
+    };
+    calibrate();
+
+    // Robustly remove grossly inconsistent calibration views. Reprojection error is
+    // measured per view; the median/MAD threshold is resistant to one bad image.
+    if (object_points.size() >= 4) {
+        std::vector<double> view_errors(object_points.size(), 0.0);
+        for (std::size_t i = 0; i < object_points.size(); ++i) {
+            std::vector<cv::Point2f> projected;
+            cv::projectPoints(object_points[i], rotations[i], translations[i],
+                              model.camera_matrix, model.distortion_coefficients, projected);
+            double squared_error = 0.0;
+            for (std::size_t j = 0; j < projected.size(); ++j) {
+                const cv::Point2f delta = projected[j] - image_points[i][j];
+                squared_error += delta.dot(delta);
+            }
+            view_errors[i] = std::sqrt(squared_error /
+                static_cast<double>(std::max<std::size_t>(1, projected.size())));
+        }
+        std::vector<double> sorted_errors = view_errors;
+        std::sort(sorted_errors.begin(), sorted_errors.end());
+        const double median = sorted_errors[sorted_errors.size() / 2];
+        std::vector<double> deviations;
+        deviations.reserve(sorted_errors.size());
+        for (const double error : view_errors) deviations.push_back(std::abs(error - median));
+        std::sort(deviations.begin(), deviations.end());
+        const double mad = deviations[deviations.size() / 2];
+        const double threshold = median + std::max(0.5, 3.0 * 1.4826 * mad);
+
+        std::vector<std::vector<cv::Point3f>> kept_objects;
+        std::vector<std::vector<cv::Point2f>> kept_images;
+        kept_objects.reserve(object_points.size());
+        kept_images.reserve(image_points.size());
+        for (std::size_t i = 0; i < object_points.size(); ++i) {
+            if (view_errors[i] <= threshold) {
+                kept_objects.push_back(std::move(object_points[i]));
+                kept_images.push_back(std::move(image_points[i]));
+            }
+        }
+        if (kept_objects.size() >= 3 && kept_objects.size() < object_points.size()) {
+            model.calibration_views_rejected = object_points.size() - kept_objects.size();
+            object_points = std::move(kept_objects);
+            image_points = std::move(kept_images);
+            calibrate();
+        }
+    }
+    model.calibration_views_used = object_points.size();
 
     cv::FileStorage output(calibration_output.string(), cv::FileStorage::WRITE);
     if (!output.isOpened()) throw std::runtime_error("cannot write calibration file: " + calibration_output.string());
@@ -486,6 +543,8 @@ CameraModel calibrate_camera_from_list(
     output << "image_width" << image_size.width;
     output << "image_height" << image_size.height;
     output << "reprojection_rms" << model.reprojection_rms;
+    output << "calibration_views_used" << static_cast<int>(model.calibration_views_used);
+    output << "calibration_views_rejected" << static_cast<int>(model.calibration_views_rejected);
     output << "board_cols" << board_cols;
     output << "board_rows" << board_rows;
     output << "square_size_mm" << square_size_mm;
@@ -503,6 +562,11 @@ CameraModel load_camera_model(const std::filesystem::path& calibration_path) {
     input["image_width"] >> model.image_size.width;
     input["image_height"] >> model.image_size.height;
     input["reprojection_rms"] >> model.reprojection_rms;
+    int views_used = 0, views_rejected = 0;
+    input["calibration_views_used"] >> views_used;
+    input["calibration_views_rejected"] >> views_rejected;
+    model.calibration_views_used = static_cast<std::size_t>(std::max(0, views_used));
+    model.calibration_views_rejected = static_cast<std::size_t>(std::max(0, views_rejected));
     if (model.camera_matrix.rows != 3 || model.camera_matrix.cols != 3 ||
         model.distortion_coefficients.empty() || model.image_size.width <= 0 ||
         model.image_size.height <= 0)
