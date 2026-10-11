@@ -12,6 +12,8 @@ struct CameraModel {
     cv::Mat distortion_coefficients;
     cv::Size image_size;
     double reprojection_rms = 0.0;
+    std::size_t calibration_views_used = 0;
+    std::size_t calibration_views_rejected = 0;
 };
 
 struct PhotogrammetryOptions {
