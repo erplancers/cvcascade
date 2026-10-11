@@ -98,7 +98,10 @@ int main(int argc, char** argv) {
                 image_list, calibration_path, board_cols, board_rows, square_size_mm);
             std::cout << "Wrote calibration: " << calibration_path
                       << "\nImage size: " << camera.image_size.width << " x " << camera.image_size.height
-                      << "\nReprojection RMS: " << camera.reprojection_rms << " px\n";
+                      << "\nReprojection RMS: " << camera.reprojection_rms << " px"
+                      << "\nCalibration views used: " << camera.calibration_views_used
+                      << "\nCalibration views rejected as outliers: " << camera.calibration_views_rejected
+                      << "\n";
             return 0;
         }
 
