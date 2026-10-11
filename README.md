@@ -134,7 +134,7 @@ The pipeline now initializes poses incrementally, merges ORB correspondences acr
 
 ## Tests
 
-CTest covers relief mapping/STL export, image-list parsing, calibration/CLI validation, voxel fusion/color averaging, PLY output, mesh topology diagnostics/repair, global bundle-adjustment convergence, and a deterministic calibrated rendered-scene geometry benchmark with known 3-D landmarks and camera poses. The rendered-scene test currently validates the shared-landmark optimization and recovered geometry; it does not yet exercise the entire image-feature-to-dense-stereo-to-STL pipeline end to end. CI configures a Conan profile before resolving dependencies, then builds and runs CTest.
+CTest covers relief mapping/STL export, image-list parsing, calibration/CLI validation, voxel fusion/color averaging, PLY output, mesh topology diagnostics/repair, global bundle-adjustment convergence, and two deterministic rendered-scene benchmarks. The camera-to-mesh integration benchmark renders a metric textured plane from three known calibrated camera poses, runs the complete feature-track → global BA → dense stereo → STL/PLY pipeline, then checks output existence, triangle/point counts, mean depth, depth spread, and plane extents against known geometry. A second controlled landmark test isolates global BA convergence and 3-D error. CI configures a Conan profile before resolving dependencies, then builds and runs CTest.
 
 
 ### Scale references and conservative mesh repair
