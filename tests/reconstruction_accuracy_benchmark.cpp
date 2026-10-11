@@ -29,10 +29,10 @@ int main() {
         std::vector<cvcascade::ColoredPoint> reference;
         for (int y = 0; y < 9; ++y) {
             for (int x = 0; x < 9; ++x) {
-                const cvcascade::ColoredPoint truth{double(x), double(y), 0.0, 180, 180, 180};
+                const cvcascade::ColoredPoint truth{x + 0.30, y + 0.30, 0.0, 180, 180, 180};
                 reference.push_back(truth);
-                observations.push_back({x + 0.01, y - 0.01, 0.015, 180, 180, 180});
-                observations.push_back({x - 0.01, y + 0.01, -0.015, 180, 180, 180});
+                observations.push_back({x + 0.31, y + 0.29, 0.015, 180, 180, 180});
+                observations.push_back({x + 0.29, y + 0.31, -0.015, 180, 180, 180});
             }
         }
         observations.push_back({50.0, 50.0, 50.0, 255, 0, 0});
