@@ -54,7 +54,8 @@ void write_reconstruction_report(const std::string& path,
         << "  \"vertices\": " << stats.vertices << ",\n"
         << "  \"triangles\": " << stats.triangles << ",\n"
         << "  \"fused_points\": " << stats.fused_points << ",\n"
-        << "  \"metric_scale\": " << (stats.metric_scale ? "true" : "false") << "\n"
+        << "  \"metric_scale\": " << (stats.metric_scale ? "true" : "false") << ",\n"
+        << "  \"applied_scale_factor\": " << stats.applied_scale_factor << "\n"
         << "}\n";
     if (!out) throw std::runtime_error("failed while writing reconstruction report: " + path);
 }
@@ -69,7 +70,8 @@ void usage(std::ostream& out) {
         << "            --board-cols N --board-rows N --square-size-mm MM\n"
         << "\nMulti-view reconstruction:\n"
         << "  cvcascade --reconstruct --images views.txt --calibration camera.yml --output model.stl\n"
-        << "            [--point-cloud cloud.ply] [--report report.json] [--fusion-voxel N] [--lr-tolerance PX]\n"
+        << "            [--point-cloud cloud.ply] [--report report.json] [--fusion-voxel N] [--min-fusion-observations N] [--lr-tolerance PX]\n"
+        << "            [--scale-reference-mm MM --scale-reference-units UNITS]\n"
         << "            [--speckle-window N] [--speckle-range N] [--max-dimension N]\n"
         << "            [--num-disparities N] [--block-size N] [--min-inliers N]\n"
         << "            [--baseline-mm MM] [--max-depth N] [--depth-jump RATIO]\n"
@@ -124,10 +126,13 @@ int main(int argc, char** argv) {
             else if (arg == "--block-size") photogrammetry_options.block_size = std::stoi(value("--block-size"));
             else if (arg == "--min-inliers") photogrammetry_options.min_inliers = std::stoi(value("--min-inliers"));
             else if (arg == "--baseline-mm") photogrammetry_options.baseline_mm = std::stod(value("--baseline-mm"));
+            else if (arg == "--scale-reference-mm") photogrammetry_options.scale_reference_mm = std::stod(value("--scale-reference-mm"));
+            else if (arg == "--scale-reference-units") photogrammetry_options.scale_reference_units = std::stod(value("--scale-reference-units"));
             else if (arg == "--max-depth") photogrammetry_options.max_depth = std::stod(value("--max-depth"));
             else if (arg == "--depth-jump") photogrammetry_options.max_relative_depth_jump = std::stod(value("--depth-jump"));
             else if (arg == "--lr-tolerance") photogrammetry_options.left_right_tolerance = std::stod(value("--lr-tolerance"));
             else if (arg == "--fusion-voxel") photogrammetry_options.fusion_voxel_size = std::stod(value("--fusion-voxel"));
+            else if (arg == "--min-fusion-observations") photogrammetry_options.min_fusion_observations = static_cast<std::size_t>(std::stoul(value("--min-fusion-observations")));
             else if (arg == "--speckle-window") photogrammetry_options.speckle_window_size = std::stoi(value("--speckle-window"));
             else if (arg == "--speckle-range") photogrammetry_options.speckle_range = std::stoi(value("--speckle-range"));
             else throw std::invalid_argument("unknown argument: " + arg);
@@ -174,11 +179,16 @@ int main(int argc, char** argv) {
                       << "\nRejected by stereo consistency: " << stats.stereo_rejected
                       << "\nMesh vertices: " << stats.vertices
                       << "\nMesh triangles: " << stats.triangles
-                      << "\nScale: " << (stats.metric_scale ? "baseline-scaled (approximate)" : "arbitrary monocular scale")
+                      << "\nScale: " << (stats.metric_scale ? "metric scale requested (validate against a known dimension)" : "arbitrary monocular scale")
+                      << "\nApplied scale factor: " << stats.applied_scale_factor
                       << "\n";
             if (!point_cloud_path.empty())
                 std::cout << "Wrote fused RGB point cloud: " << point_cloud_path
                           << "\nFused points: " << stats.fused_points << "\n";
+            if (!report_path.empty()) {
+                write_reconstruction_report(report_path, stats, output, point_cloud_path);
+                std::cout << "Wrote reconstruction report: " << report_path << "\n";
+            }
             return 0;
         }
 
