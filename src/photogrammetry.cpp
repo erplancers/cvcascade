@@ -1,4 +1,6 @@
 #include "cvcascade/photogrammetry.hpp"
+#include "cvcascade/bundle_adjustment.hpp"
+#include "cvcascade/mesh_topology.hpp"
 
 #include <BRep_Builder.hxx>
 #include <Poly_Triangle.hxx>
@@ -165,7 +167,8 @@ std::size_t append_dense_stereo_mesh(
     std::size_t& stereo_candidates,
     std::size_t& stereo_consistent,
     std::size_t& stereo_rejected,
-    double& valid_depth_ratio) {
+    double& valid_depth_ratio,
+    MeshTopologyReport& topology_report) {
 
     cv::Mat r1, r2, p1, p2, q;
     cv::stereoRectify(camera.camera_matrix, camera.distortion_coefficients,
@@ -251,7 +254,11 @@ std::size_t append_dense_stereo_mesh(
 
             const cv::Mat rectified_point = (cv::Mat_<double>(3, 1) << point[0], point[1], point[2]);
             const cv::Mat camera_point = rectified_to_camera * rectified_point;
-            const cv::Mat world_point = camera_to_world_rotation * camera_point + camera_to_world_translation;
+            const double output_scale = options.scale_reference_mm > 0.0 &&
+                options.scale_reference_units > 0.0
+                ? options.scale_reference_mm / options.scale_reference_units : 1.0;
+            const cv::Mat world_point = output_scale *
+                (camera_to_world_rotation * camera_point + camera_to_world_translation);
             const double wx = world_point.at<double>(0), wy = world_point.at<double>(1), wz = world_point.at<double>(2);
             if (!std::isfinite(wx) || !std::isfinite(wy) || !std::isfinite(wz)) continue;
 
@@ -287,6 +294,35 @@ std::size_t append_dense_stereo_mesh(
             triangles.push_back({a, c, d});
         }
     }
+    if (triangles.empty()) return 0;
+
+    // Validate every generated patch before handing it to Open CASCADE. Repair is
+    // intentionally conservative: it removes invalid/duplicate faces and unused
+    // vertices but never invents triangles to fill uncertain depth boundaries.
+    std::vector<cv::Point3d> quality_vertices;
+    quality_vertices.reserve(vertices.size());
+    for (const auto& vertex : vertices)
+        quality_vertices.emplace_back(vertex.X(), vertex.Y(), vertex.Z());
+    std::vector<MeshTriangle> quality_triangles;
+    quality_triangles.reserve(triangles.size());
+    for (const auto& triangle : triangles)
+        quality_triangles.push_back({static_cast<std::size_t>(triangle[0] - 1),
+                                     static_cast<std::size_t>(triangle[1] - 1),
+                                     static_cast<std::size_t>(triangle[2] - 1)});
+    const MeshTopologyReport before_repair =
+        analyze_mesh_topology(quality_vertices, quality_triangles);
+    topology_report = repair_mesh_topology(quality_vertices, quality_triangles);
+    topology_report.degenerate_faces = before_repair.degenerate_faces;
+    topology_report.duplicate_faces = before_repair.duplicate_faces;
+    vertices.clear();
+    vertices.reserve(quality_vertices.size());
+    for (const auto& vertex : quality_vertices) vertices.emplace_back(vertex.x, vertex.y, vertex.z);
+    triangles.clear();
+    triangles.reserve(quality_triangles.size());
+    for (const auto& triangle : quality_triangles)
+        triangles.push_back({static_cast<Standard_Integer>(triangle[0] + 1),
+                             static_cast<Standard_Integer>(triangle[1] + 1),
+                             static_cast<Standard_Integer>(triangle[2] + 1)});
     if (triangles.empty()) return 0;
 
     Handle(Poly_Triangulation) triangulation = new Poly_Triangulation(
@@ -334,9 +370,11 @@ struct VoxelAccum {
 } // namespace
 
 std::vector<ColoredPoint> fuse_point_cloud_voxels(
-    const std::vector<ColoredPoint>& points, double voxel_size) {
+    const std::vector<ColoredPoint>& points, double voxel_size, std::size_t minimum_observations) {
     if (!(voxel_size > 0.0) || !std::isfinite(voxel_size))
         throw std::invalid_argument("fusion voxel size must be finite and positive");
+    if (minimum_observations == 0)
+        throw std::invalid_argument("minimum fusion observations must be at least one");
 
     std::unordered_map<VoxelKey, VoxelAccum, VoxelHash> voxels;
     voxels.reserve(points.size());
@@ -368,6 +406,7 @@ std::vector<ColoredPoint> fuse_point_cloud_voxels(
     fused.reserve(voxels.size());
     for (const auto& entry : voxels) {
         const auto& voxel = entry.second;
+        if (voxel.count < minimum_observations) continue;
         const double count = static_cast<double>(voxel.count);
         fused.push_back({
             voxel.x / count, voxel.y / count, voxel.z / count,
@@ -451,8 +490,14 @@ CameraModel calibrate_camera_from_list(
             throw std::runtime_error("calibration images must all have the same dimensions");
 
         std::vector<cv::Point2f> corners;
-        if (!cv::findChessboardCorners(gray, cv::Size(board_cols, board_rows), corners,
-                cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE)) continue;
+        const cv::Size board_size(board_cols, board_rows);
+        bool found = cv::findChessboardCornersSB(gray, board_size, corners,
+            cv::CALIB_CB_NORMALIZE_IMAGE | cv::CALIB_CB_EXHAUSTIVE);
+        if (!found) {
+            found = cv::findChessboardCorners(gray, board_size, corners,
+                cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE);
+        }
+        if (!found) continue;
         cv::Mat refined = gray.clone();
         cv::cornerSubPix(refined, corners, cv::Size(11, 11), cv::Size(-1, -1),
             cv::TermCriteria(cv::TermCriteria::EPS | cv::TermCriteria::COUNT, 30, 0.001));
@@ -475,9 +520,60 @@ CameraModel calibrate_camera_from_list(
     model.camera_matrix = cv::initCameraMatrix2D(object_points, image_points, image_size);
     model.distortion_coefficients = cv::Mat::zeros(8, 1, CV_64F);
     std::vector<cv::Mat> rotations, translations;
-    model.reprojection_rms = cv::calibrateCamera(
-        object_points, image_points, image_size, model.camera_matrix,
-        model.distortion_coefficients, rotations, translations);
+
+    auto calibrate = [&]() {
+        rotations.clear();
+        translations.clear();
+        model.reprojection_rms = cv::calibrateCamera(
+            object_points, image_points, image_size, model.camera_matrix,
+            model.distortion_coefficients, rotations, translations);
+    };
+    calibrate();
+
+    // Robustly remove grossly inconsistent calibration views. Reprojection error is
+    // measured per view; the median/MAD threshold is resistant to one bad image.
+    if (object_points.size() >= 4) {
+        std::vector<double> view_errors(object_points.size(), 0.0);
+        for (std::size_t i = 0; i < object_points.size(); ++i) {
+            std::vector<cv::Point2f> projected;
+            cv::projectPoints(object_points[i], rotations[i], translations[i],
+                              model.camera_matrix, model.distortion_coefficients, projected);
+            double squared_error = 0.0;
+            for (std::size_t j = 0; j < projected.size(); ++j) {
+                const cv::Point2f delta = projected[j] - image_points[i][j];
+                squared_error += delta.dot(delta);
+            }
+            view_errors[i] = std::sqrt(squared_error /
+                static_cast<double>(std::max<std::size_t>(1, projected.size())));
+        }
+        std::vector<double> sorted_errors = view_errors;
+        std::sort(sorted_errors.begin(), sorted_errors.end());
+        const double median = sorted_errors[sorted_errors.size() / 2];
+        std::vector<double> deviations;
+        deviations.reserve(sorted_errors.size());
+        for (const double error : view_errors) deviations.push_back(std::abs(error - median));
+        std::sort(deviations.begin(), deviations.end());
+        const double mad = deviations[deviations.size() / 2];
+        const double threshold = median + std::max(0.5, 3.0 * 1.4826 * mad);
+
+        std::vector<std::vector<cv::Point3f>> kept_objects;
+        std::vector<std::vector<cv::Point2f>> kept_images;
+        kept_objects.reserve(object_points.size());
+        kept_images.reserve(image_points.size());
+        for (std::size_t i = 0; i < object_points.size(); ++i) {
+            if (view_errors[i] <= threshold) {
+                kept_objects.push_back(object_points[i]);
+                kept_images.push_back(image_points[i]);
+            }
+        }
+        if (kept_objects.size() >= 3 && kept_objects.size() < object_points.size()) {
+            model.calibration_views_rejected = object_points.size() - kept_objects.size();
+            object_points = std::move(kept_objects);
+            image_points = std::move(kept_images);
+            calibrate();
+        }
+    }
+    model.calibration_views_used = object_points.size();
 
     cv::FileStorage output(calibration_output.string(), cv::FileStorage::WRITE);
     if (!output.isOpened()) throw std::runtime_error("cannot write calibration file: " + calibration_output.string());
@@ -486,6 +582,8 @@ CameraModel calibrate_camera_from_list(
     output << "image_width" << image_size.width;
     output << "image_height" << image_size.height;
     output << "reprojection_rms" << model.reprojection_rms;
+    output << "calibration_views_used" << static_cast<int>(model.calibration_views_used);
+    output << "calibration_views_rejected" << static_cast<int>(model.calibration_views_rejected);
     output << "board_cols" << board_cols;
     output << "board_rows" << board_rows;
     output << "square_size_mm" << square_size_mm;
@@ -503,6 +601,11 @@ CameraModel load_camera_model(const std::filesystem::path& calibration_path) {
     input["image_width"] >> model.image_size.width;
     input["image_height"] >> model.image_size.height;
     input["reprojection_rms"] >> model.reprojection_rms;
+    int views_used = 0, views_rejected = 0;
+    input["calibration_views_used"] >> views_used;
+    input["calibration_views_rejected"] >> views_rejected;
+    model.calibration_views_used = static_cast<std::size_t>(std::max(0, views_used));
+    model.calibration_views_rejected = static_cast<std::size_t>(std::max(0, views_rejected));
     if (model.camera_matrix.rows != 3 || model.camera_matrix.cols != 3 ||
         model.distortion_coefficients.empty() || model.image_size.width <= 0 ||
         model.image_size.height <= 0)
@@ -528,6 +631,15 @@ ReconstructionStats reconstruct_multiview(
     if (options.min_inliers < 8) throw std::invalid_argument("min-inliers must be at least 8");
     if (!(options.baseline_mm >= 0.0) || !std::isfinite(options.baseline_mm))
         throw std::invalid_argument("baseline-mm must be finite and non-negative");
+    const bool has_scale_reference = options.scale_reference_mm > 0.0 || options.scale_reference_units > 0.0;
+    if (has_scale_reference && (!(options.scale_reference_mm > 0.0) ||
+        !(options.scale_reference_units > 0.0) || !std::isfinite(options.scale_reference_mm) ||
+        !std::isfinite(options.scale_reference_units)))
+        throw std::invalid_argument("scale reference requires positive finite --scale-reference-mm and --scale-reference-units");
+    if (has_scale_reference && options.baseline_mm > 0.0)
+        throw std::invalid_argument("use either --baseline-mm or the scale-reference pair, not both");
+    if (options.min_fusion_observations == 0)
+        throw std::invalid_argument("minimum fusion observations must be at least one");
     if (!(options.max_depth > 0.0) || !std::isfinite(options.max_depth))
         throw std::invalid_argument("max-depth must be finite and positive");
     if (!(options.max_relative_depth_jump > 0.0 && options.max_relative_depth_jump <= 1.0))
@@ -575,7 +687,9 @@ ReconstructionStats reconstruct_multiview(
 
     ReconstructionStats stats;
     stats.images = images.size();
-    stats.metric_scale = options.baseline_mm > 0.0;
+    stats.metric_scale = options.baseline_mm > 0.0 || has_scale_reference;
+    stats.applied_scale_factor = has_scale_reference
+        ? options.scale_reference_mm / options.scale_reference_units : 1.0;
     double inlier_ratio_sum = 0.0;
 
     for (std::size_t i = 1; i < images.size(); ++i) {
@@ -593,6 +707,84 @@ ReconstructionStats reconstruct_multiview(
             static_cast<double>(std::max<std::size_t>(1, pose.good_matches));
         pair_poses.push_back(std::move(pose));
     }
+    // Build persistent tracks across all views, triangulate shared landmarks in the
+    // chained-pose initialization, then jointly refine every camera and landmark.
+    const auto raw_tracks = build_shared_feature_tracks(images, 0.75, 2);
+    std::vector<BundleCamera> bundle_cameras(images.size());
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        cv::Rodrigues(camera_rotations[i], bundle_cameras[i].rotation_vector);
+        bundle_cameras[i].translation = camera_translations[i].clone();
+    }
+    std::vector<FeatureTrack> bundle_tracks;
+    std::vector<cv::Point3d> bundle_landmarks;
+    bundle_tracks.reserve(raw_tracks.size());
+    std::vector<cv::Mat> projections(images.size());
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        cv::Mat extrinsic;
+        cv::hconcat(camera_rotations[i], camera_translations[i], extrinsic);
+        projections[i] = camera.camera_matrix * extrinsic;
+    }
+    for (const auto& track : raw_tracks) {
+        if (track.observations.size() < 2) continue;
+        const auto& first = track.observations.front();
+        const auto& last = track.observations.back();
+        std::vector<cv::Point2d> first_pixel{first.pixel}, last_pixel{last.pixel};
+        std::vector<cv::Point2d> first_undistorted, last_undistorted;
+        cv::undistortPoints(first_pixel, first_undistorted, camera.camera_matrix,
+                            camera.distortion_coefficients, cv::noArray(), camera.camera_matrix);
+        cv::undistortPoints(last_pixel, last_undistorted, camera.camera_matrix,
+                            camera.distortion_coefficients, cv::noArray(), camera.camera_matrix);
+        cv::Mat homogeneous;
+        cv::triangulatePoints(projections[first.camera_index], projections[last.camera_index],
+                              first_undistorted, last_undistorted, homogeneous);
+        const double w = homogeneous.at<double>(3, 0);
+        if (!std::isfinite(w) || std::abs(w) < 1e-10) continue;
+        const cv::Point3d point(homogeneous.at<double>(0, 0) / w,
+                                homogeneous.at<double>(1, 0) / w,
+                                homogeneous.at<double>(2, 0) / w);
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
+        bool visible = true;
+        for (const auto& observation : track.observations) {
+            const cv::Mat camera_point = camera_rotations[observation.camera_index] *
+                (cv::Mat_<double>(3, 1) << point.x, point.y, point.z) +
+                camera_translations[observation.camera_index];
+            if (!(camera_point.at<double>(2) > 0.0)) { visible = false; break; }
+        }
+        if (!visible) continue;
+        const std::size_t landmark_id = bundle_landmarks.size();
+        bundle_landmarks.push_back(point);
+        FeatureTrack accepted;
+        for (const auto& observation : track.observations) {
+            std::vector<cv::Point2d> raw{observation.pixel}, undistorted;
+            cv::undistortPoints(raw, undistorted, camera.camera_matrix,
+                                camera.distortion_coefficients, cv::noArray(), camera.camera_matrix);
+            accepted.observations.push_back({observation.camera_index, landmark_id, undistorted.front()});
+        }
+        bundle_tracks.push_back(std::move(accepted));
+    }
+    if (bundle_tracks.size() >= 8 && bundle_landmarks.size() >= 8) {
+        BundleAdjustmentOptions ba_options;
+        ba_options.max_iterations = 12;
+        const auto ba = optimize_global_bundle(camera.camera_matrix, bundle_tracks,
+                                               bundle_cameras, bundle_landmarks, ba_options);
+        stats.shared_tracks = ba.tracks;
+        stats.bundle_observations = ba.observations;
+        stats.bundle_initial_rmse = ba.initial_rmse;
+        stats.bundle_final_rmse = ba.final_rmse;
+        stats.bundle_iterations = static_cast<std::size_t>(std::max(0, ba.iterations));
+        for (std::size_t i = 0; i < images.size(); ++i) {
+            cv::Rodrigues(bundle_cameras[i].rotation_vector, camera_rotations[i]);
+            camera_translations[i] = bundle_cameras[i].translation.clone();
+        }
+        // Recompute each relative pose from globally optimized world-to-camera poses.
+        for (std::size_t i = 0; i < pair_poses.size(); ++i) {
+            pair_poses[i].rotation = camera_rotations[i + 1] * camera_rotations[i].t();
+            pair_poses[i].translation = camera_translations[i + 1] -
+                pair_poses[i].rotation * camera_translations[i];
+        }
+    } else {
+        throw std::runtime_error("global bundle adjustment could not initialize: too few valid shared multi-view tracks");
+    }
     stats.mean_pose_inlier_ratio = inlier_ratio_sum / static_cast<double>(pair_poses.size());
 
     BRep_Builder builder;
@@ -606,13 +798,18 @@ ReconstructionStats reconstruct_multiview(
     for (std::size_t i = 0; i < pair_poses.size(); ++i) {
         const cv::Mat& color_first = output_ply.empty() ? images[i] : color_images[i];
         double valid_ratio = 0.0;
+        MeshTopologyReport topology;
         const std::size_t triangles = append_dense_stereo_mesh(
             images[i], images[i + 1], color_first, camera, pair_poses[i],
             camera_rotations[i], camera_translations[i], options,
             builder, compound, stats.vertices,
             output_ply.empty() ? nullptr : &cloud_samples,
             stats.stereo_candidates, stats.stereo_consistent, stats.stereo_rejected,
-            valid_ratio);
+            valid_ratio, topology);
+        stats.mesh_boundary_edges += topology.boundary_edges;
+        stats.mesh_non_manifold_edges += topology.non_manifold_edges;
+        stats.mesh_degenerate_faces_removed += topology.degenerate_faces;
+        stats.mesh_duplicate_faces_removed += topology.duplicate_faces;
         valid_ratio_sum += valid_ratio;
         stats.triangles += triangles;
         if (triangles > 0) ++stats.registered_pairs;
@@ -627,7 +824,8 @@ ReconstructionStats reconstruct_multiview(
         throw std::runtime_error("Open CASCADE failed to write STL: " + output_stl.string());
 
     if (!output_ply.empty()) {
-        const auto fused = fuse_point_cloud_voxels(cloud_samples, options.fusion_voxel_size);
+        const auto fused = fuse_point_cloud_voxels(
+            cloud_samples, options.fusion_voxel_size, options.min_fusion_observations);
         if (fused.empty()) throw std::runtime_error("no points remain after dense point-cloud fusion");
         write_ply_point_cloud(output_ply, fused);
         stats.fused_points = fused.size();

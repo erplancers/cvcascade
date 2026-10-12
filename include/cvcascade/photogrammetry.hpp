@@ -12,6 +12,8 @@ struct CameraModel {
     cv::Mat distortion_coefficients;
     cv::Size image_size;
     double reprojection_rms = 0.0;
+    std::size_t calibration_views_used = 0;
+    std::size_t calibration_views_rejected = 0;
 };
 
 struct PhotogrammetryOptions {
@@ -20,10 +22,13 @@ struct PhotogrammetryOptions {
     int block_size = 5;
     int min_inliers = 30;
     double baseline_mm = 0.0;
+    double scale_reference_mm = 0.0;
+    double scale_reference_units = 0.0;
     double max_depth = 10000.0;
     double max_relative_depth_jump = 0.20;
     double left_right_tolerance = 1.5;
     double fusion_voxel_size = 2.0;
+    std::size_t min_fusion_observations = 1;
     int speckle_window_size = 100;
     int speckle_range = 2;
 };
@@ -41,13 +46,24 @@ struct ReconstructionStats {
     std::size_t images = 0;
     std::size_t registered_pairs = 0;
     std::size_t feature_matches = 0;
+    std::size_t shared_tracks = 0;
+    std::size_t bundle_observations = 0;
+    std::size_t bundle_iterations = 0;
+    double bundle_initial_rmse = 0.0;
+    double bundle_final_rmse = 0.0;
     std::size_t pose_inliers = 0;
     std::size_t vertices = 0;
     std::size_t triangles = 0;
+    std::size_t mesh_boundary_edges = 0;
+    std::size_t mesh_non_manifold_edges = 0;
+    std::size_t mesh_degenerate_faces_removed = 0;
+    std::size_t mesh_duplicate_faces_removed = 0;
     std::size_t stereo_candidates = 0;
     std::size_t stereo_consistent = 0;
     std::size_t stereo_rejected = 0;
     std::size_t fused_points = 0;
+    std::size_t fusion_voxels_rejected = 0;
+    double applied_scale_factor = 1.0;
     double mean_pose_inlier_ratio = 0.0;
     double mean_valid_depth_ratio = 0.0;
     bool metric_scale = false;
@@ -66,7 +82,8 @@ CameraModel load_camera_model(const std::filesystem::path& calibration_path);
 
 std::vector<ColoredPoint> fuse_point_cloud_voxels(
     const std::vector<ColoredPoint>& points,
-    double voxel_size);
+    double voxel_size,
+    std::size_t minimum_observations = 1);
 
 void write_ply_point_cloud(
     const std::filesystem::path& output_path,

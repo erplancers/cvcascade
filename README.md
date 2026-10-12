@@ -5,14 +5,14 @@ A C++20 command-line photogrammetry prototype using **OpenCV** for image process
 ## Capabilities
 
 - **Single-image relief:** brightness-driven height mapping for bas-reliefs and lithophanes.
-- **Camera calibration:** chessboard-based intrinsics and lens-distortion calibration.
-- **Incremental multi-view reconstruction:** ORB feature matching, RANSAC essential-matrix estimation, relative pose recovery and chained camera poses.
+- **Camera calibration:** chessboard-based intrinsics and lens-distortion calibration, with the SB detector as a fallback and robust median/MAD rejection of grossly inconsistent views.
+- **Multi-view reconstruction:** ORB feature matching, RANSAC essential-matrix initialization, persistent cross-view feature tracks, triangulated shared landmarks, and robust global bundle adjustment using a damped Schur-complement solver.
 - **Bidirectional stereo consistency:** computes forward and reverse SGBM disparity and rejects ambiguous matches.
 - **Speckle/outlier suppression:** disparity speckle filtering, max-depth rejection and relative depth discontinuity rejection before surface triangulation.
 - **Dense colored point cloud:** optional RGB PLY export from the rectified source images.
 - **Voxel-grid fusion:** deterministic voxel downsampling that averages point coordinates and colors to reduce duplicate samples across adjacent stereo pairs.
 - **wxWidgets desktop GUI:** graphical workflows for relief generation, camera calibration, and reconstruction with browse dialogs, image preview, adjustable parameters, background execution, progress indicator, logs, and result summaries.
-- **Reconstruction quality report:** reports feature matches/inliers, pose inlier ratio, valid-depth ratio, stereo consistency counts and mesh size.
+- **Reconstruction quality report:** console metrics plus optional machine-readable JSON output (`--report report.json`) with feature matches/inliers, pose inlier ratio, valid-depth ratio, stereo consistency counts, mesh size, and scale status.
 
 ## Dependencies and cross-platform build
 
@@ -88,7 +88,7 @@ Use images from the **same camera and resolution**. Capture 5-15 varied views of
   --board-cols 9 --board-rows 6 --square-size-mm 25
 ```
 
-The calibration file stores the camera matrix, distortion coefficients, image dimensions and reprojection RMS. Use your board's actual inner-corner layout and square size.
+The calibration file stores the camera matrix, distortion coefficients, image dimensions, reprojection RMS, and counts of accepted/rejected calibration views. CVCascade tries OpenCV's more robust SB chessboard detector first, then falls back to the classic detector. After an initial fit, it rejects gross per-view reprojection outliers using a median/MAD threshold when at least three views can be retained. Use your board's actual inner-corner layout and square size.
 
 ## 3. Multi-view photogrammetry, dense stereo and fusion
 
@@ -111,10 +111,10 @@ Export both a mesh and a colored, voxel-fused PLY point cloud:
   --max-dimension 640 --num-disparities 128 --block-size 5 \
   --min-inliers 30 --lr-tolerance 1.5 \
   --speckle-window 100 --speckle-range 2 \
-  --fusion-voxel 2.0 --depth-jump 0.20
+  --fusion-voxel 2.0 --depth-jump 0.20 --report reconstruction-report.json
 ```
 
-The console report includes the number of feature matches and pose inliers, mean inlier ratio, average valid-depth ratio, left-right stereo consistency, rejected stereo candidates, mesh vertices/triangles and fused point count.
+The console report includes the number of feature matches and pose inliers, mean inlier ratio, average valid-depth ratio, left-right stereo consistency, rejected stereo candidates, mesh vertices/triangles and fused point count. `--report reconstruction-report.json` writes these metrics and the output paths to JSON for automated quality tracking.
 
 ### Reconstruction options
 
@@ -130,8 +130,25 @@ The console report includes the number of feature matches and pose inliers, mean
 - `--point-cloud cloud.ply`: additionally export an ASCII PLY with RGB colors.
 - `--fusion-voxel N`: voxel size for point-cloud downsampling/fusion. Units are millimetres only when the supplied baseline genuinely defines metric scale; otherwise they are arbitrary model units.
 
-The pipeline remains an incremental SfM + pairwise MVS prototype. It chains relative poses and appends pairwise triangulated surfaces into an OCCT compound. Voxel fusion currently applies to the optional point cloud, not to the STL mesh. It does **not** yet include global bundle adjustment, loop closure, global depth-map fusion, texture baking, or watertight mesh repair. Pairwise poses can accumulate drift; setting `--baseline-mm` is metrically meaningful only when each adjacent pair really uses that baseline. Glossy, textureless, moving, or poorly lit scenes remain difficult.
+The pipeline now initializes poses incrementally, merges ORB correspondences across all image pairs into persistent tracks, triangulates shared landmarks, and jointly refines camera poses and landmarks by robust global bundle adjustment. Camera 0 anchors the world frame and the first baseline length fixes monocular scale. The dense surfaces are still produced pairwise and appended into an OCCT compound; voxel fusion applies to the optional point cloud, not to the STL mesh. Loop-closure pose-graph optimization, global depth-map fusion, texture baking, and watertight mesh repair are still outstanding. Initialization errors or weak tracks can still cause drift; setting `--baseline-mm` is metrically meaningful only when each adjacent pair really uses that baseline. Glossy, textureless, moving, or poorly lit scenes remain difficult.
 
 ## Tests
 
-CTest covers relief mapping and STL export, image-list parsing, calibration/CLI validation, voxel fusion/color averaging, invalid voxel sizes, and PLY header/content export. CI configures a Conan profile before resolving dependencies, then builds and runs CTest.
+CTest covers relief mapping/STL export, image-list parsing, calibration/CLI validation, voxel fusion/color averaging, PLY output, mesh topology diagnostics/repair, global bundle-adjustment convergence, and two deterministic rendered-scene benchmarks. The camera-to-mesh integration benchmark renders a metric textured plane from three known calibrated camera poses, runs the complete feature-track → global BA → dense stereo → STL/PLY pipeline, then checks output existence, triangle/point counts, mean depth, depth spread, and plane extents against known geometry. A second controlled landmark test isolates global BA convergence and 3-D error. CI configures a Conan profile before resolving dependencies, then builds and runs CTest.
+
+
+### Scale references and conservative mesh repair
+
+For a model reconstructed at arbitrary monocular scale, provide a known distance and the same distance measured in the unscaled reconstruction:
+
+```bash
+cvcascade --reconstruct --images views.txt --calibration camera.yml --output model.stl \
+  --scale-reference-mm 120 --scale-reference-units 3.84 \
+  --point-cloud cloud.ply --min-fusion-observations 2 --report report.json
+```
+
+The scale factor is `known distance in mm / measured distance in current model units`. The current CLI expects the user to measure the corresponding 3D landmark separation in the unscaled reconstruction; it does not yet provide interactive landmark picking. Do not combine this option with `--baseline-mm`. Always validate at least one independent known dimension after scaling.
+
+Voxel fusion can require multiple samples per voxel with `--min-fusion-observations N`, helping discard isolated one-view samples. Choose N according to overlap and scene coverage; too high a value removes legitimate surfaces.
+
+Before a generated mesh patch is handed to Open CASCADE, CVCascade now detects invalid-index/non-finite/zero-area and duplicate faces, removes them conservatively, compacts unused vertices, and reports boundary/non-manifold edges. Boundary edges are expected on partial stereo patches; this repair does **not** fill holes or guarantee a watertight mesh. Topology utilities are covered by a deterministic unit test.

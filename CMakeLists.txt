@@ -16,6 +16,8 @@ find_package(OpenCASCADE CONFIG REQUIRED)
 add_library(cvcascade_core
   src/mesh_builder.cpp
   src/photogrammetry.cpp
+  src/bundle_adjustment.cpp
+  src/mesh_topology.cpp
 )
 target_include_directories(cvcascade_core PUBLIC include)
 target_link_libraries(cvcascade_core PUBLIC
@@ -69,6 +71,22 @@ if(CVCASCADE_BUILD_TESTS)
   add_executable(cvcascade_photogrammetry_tests tests/photogrammetry_tests.cpp)
   target_link_libraries(cvcascade_photogrammetry_tests PRIVATE cvcascade_core)
   add_test(NAME photogrammetry_unit COMMAND cvcascade_photogrammetry_tests)
+
+  add_executable(cvcascade_global_ba_tests tests/global_bundle_adjustment_tests.cpp)
+  target_link_libraries(cvcascade_global_ba_tests PRIVATE cvcascade_core)
+  add_test(NAME global_bundle_adjustment_rendered_scene COMMAND cvcascade_global_ba_tests)
+
+  add_executable(cvcascade_rendered_camera_to_mesh_benchmark tests/rendered_camera_to_mesh_benchmark.cpp)
+  target_link_libraries(cvcascade_rendered_camera_to_mesh_benchmark PRIVATE cvcascade_core)
+  add_test(NAME rendered_camera_to_mesh_accuracy COMMAND cvcascade_rendered_camera_to_mesh_benchmark)
+
+  add_executable(cvcascade_mesh_topology_tests tests/mesh_topology_tests.cpp)
+  target_link_libraries(cvcascade_mesh_topology_tests PRIVATE cvcascade_core)
+  add_test(NAME mesh_topology_unit COMMAND cvcascade_mesh_topology_tests)
+
+  add_executable(cvcascade_accuracy_benchmark tests/reconstruction_accuracy_benchmark.cpp)
+  target_link_libraries(cvcascade_accuracy_benchmark PRIVATE cvcascade_core)
+  add_test(NAME synthetic_reconstruction_accuracy COMMAND cvcascade_accuracy_benchmark)
 
   add_test(NAME cli_help COMMAND cvcascade --help)
   set_tests_properties(cli_help PROPERTIES PASS_REGULAR_EXPRESSION "--point-cloud")
