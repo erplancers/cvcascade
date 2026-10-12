@@ -413,7 +413,7 @@ private:
 
         auto* note = new wxStaticText(scroller, wxID_ANY,
             "Without a known baseline, scale and voxel size are arbitrary. Voxel fusion affects PLY; "
-            "the STL retains per-pair surfaces. Global bundle adjustment and watertight repair are not implemented.");
+            "the STL retains per-pair surfaces. Review bundle-adjustment and mesh-topology diagnostics; conservative repair does not guarantee watertightness.");
         note->Wrap(1000);
         outer->Add(note, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
         auto* run = new wxButton(scroller, wxID_ANY, "Reconstruct mesh and point cloud");
