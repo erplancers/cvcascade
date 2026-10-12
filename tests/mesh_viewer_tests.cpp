@@ -1,6 +1,7 @@
 #include "cvcascade/mesh_viewer.hpp"
 
 #include <filesystem>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
