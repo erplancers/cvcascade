@@ -12,6 +12,7 @@ A C++20 command-line photogrammetry prototype using **OpenCV** for image process
 - **Dense colored point cloud:** optional RGB PLY export from the rectified source images.
 - **Voxel-grid fusion:** deterministic voxel downsampling that averages point coordinates and colors to reduce duplicate samples across adjacent stereo pairs.
 - **wxWidgets desktop GUI:** graphical workflows for relief generation, camera calibration, and reconstruction with browse dialogs, image preview, adjustable parameters, background execution, progress indicator, logs, and result summaries.
+- **GUI quality reports:** reconstruction can export a versioned JSON sidecar containing shared tracks, bundle-adjustment convergence, stereo consistency, mesh topology diagnostics, scale status, and output paths. The GUI validates manifest/calibration existence, stereo disparity/block-size constraints, and output-path collisions before launching a reconstruction.
 - **Reconstruction quality report:** console metrics plus optional machine-readable JSON output (`--report report.json`) with feature matches/inliers, pose inlier ratio, valid-depth ratio, stereo consistency counts, mesh size, and scale status.
 
 ## Dependencies and cross-platform build
@@ -115,6 +116,7 @@ Export both a mesh and a colored, voxel-fused PLY point cloud:
 ```
 
 The console report includes the number of feature matches and pose inliers, mean inlier ratio, average valid-depth ratio, left-right stereo consistency, rejected stereo candidates, mesh vertices/triangles and fused point count. `--report reconstruction-report.json` writes these metrics and the output paths to JSON for automated quality tracking.
+The desktop UI offers the same kind of sidecar report via the **Quality report (.json)** path. Its schema starts with `schema_version: 1` and includes shared multi-view tracks, global bundle-adjustment observations/iterations and initial/final reprojection RMSE, stereo rejection counts, boundary/non-manifold edges, removed degenerate/duplicate faces, fused points, scale metadata, and output paths. Treat the report as diagnostic evidence rather than a guarantee of metric accuracy or watertightness.
 
 ### Reconstruction options
 
