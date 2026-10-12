@@ -50,5 +50,5 @@ if(CVCASCADE_BUILD_TESTS)
   add_test(NAME photogrammetry_unit COMMAND cvcascade_photogrammetry_tests)
 
   add_test(NAME cli_help COMMAND cvcascade --help)
-  set_tests_properties(cli_help PROPERTIES PASS_REGULAR_EXPRESSION "--calibrate")
+  set_tests_properties(cli_help PROPERTIES PASS_REGULAR_EXPRESSION "--point-cloud")
 endif()
