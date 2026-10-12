@@ -18,7 +18,6 @@ add_library(cvcascade_core
   src/photogrammetry.cpp
   src/bundle_adjustment.cpp
   src/mesh_topology.cpp
-  src/mesh_viewer.cpp
 )
 target_include_directories(cvcascade_core PUBLIC include)
 target_link_libraries(cvcascade_core PUBLIC
@@ -52,9 +51,9 @@ if(CVCASCADE_BUILD_GUI)
   find_package(wxWidgets CONFIG REQUIRED)
   # wxIMPLEMENT_APP supplies the Windows GUI entry point (WinMain), not console main().
   if(WIN32)
-    add_executable(cvcascade_gui WIN32 src/gui_main.cpp)
+    add_executable(cvcascade_gui WIN32 src/gui_main.cpp src/mesh_viewer.cpp)
   else()
-    add_executable(cvcascade_gui src/gui_main.cpp)
+    add_executable(cvcascade_gui src/gui_main.cpp src/mesh_viewer.cpp)
   endif()
   target_link_libraries(cvcascade_gui PRIVATE cvcascade_core wxWidgets::wxWidgets)
   list(APPEND CVCASCADE_INSTALL_TARGETS cvcascade_gui)
