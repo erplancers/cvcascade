@@ -150,8 +150,8 @@ public:
         const int save_project_as_id = wxWindow::NewControlId();
         const int load_preset_id = wxWindow::NewControlId();
         const int save_preset_id = wxWindow::NewControlId();
-        menu_file->Append(open_project_id, "&Open project…\\tCtrl+O");
-        menu_file->Append(save_project_id, "&Save project\\tCtrl+S");
+        menu_file->Append(open_project_id, "&Open project…\tCtrl+O");
+        menu_file->Append(save_project_id, "&Save project\tCtrl+S");
         menu_file->Append(save_project_as_id, "Save project &as…");
         menu_file->AppendSeparator();
         menu_file->Append(load_preset_id, "Load settings &preset…");
