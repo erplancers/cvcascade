@@ -677,10 +677,15 @@ private:
                 triangles.push_back({result->vertices[f[0]], result->vertices[f[1]], result->vertices[f[2]]});
             mesh_viewer_->SetMesh(std::move(triangles));
             const auto& t = result->topology;
-            inspection_summary_->SetLabel(wxString::Format(
-                "Vertices: %zu | Faces: %zu | Components: %zu | Boundary edges: %zu | Non-manifold: %zu | Degenerate: %zu | Duplicate: %zu | Watertight: %s",
-                t.vertices, t.faces, t.connected_components, t.boundary_edges, t.non_manifold_edges,
-                t.degenerate_faces, t.duplicate_faces, t.watertight() ? "yes" : "no"));
+            std::ostringstream summary;
+            summary << "Vertices: " << t.vertices << " | Faces: " << t.faces
+                    << " | Components: " << t.connected_components
+                    << " | Boundary edges: " << t.boundary_edges
+                    << " | Non-manifold: " << t.non_manifold_edges
+                    << " | Degenerate: " << t.degenerate_faces
+                    << " | Duplicate: " << t.duplicate_faces
+                    << " | Watertight: " << (t.watertight() ? "yes" : "no");
+            inspection_summary_->SetLabel(wxString::FromUTF8(summary.str()));
             Layout();
         });
     }
@@ -731,6 +736,8 @@ private:
             std::string result;
             try {
                 result = operation();
+                if (cancel_requested_.load(std::memory_order_relaxed))
+                    throw std::runtime_error("Operation cancelled by user.");
                 succeeded = true;
             } catch (const std::exception& e) {
                 result = e.what();
@@ -774,7 +781,7 @@ private:
         options.invert = relief_invert_->GetValue();
         const int threads = relief_threads_->GetValue();
 
-        RunJob("Photo relief", [input, output, options, threads]() {
+        RunJob("Photo relief", [this, input, output, options, threads]() {
 #ifdef CVCASCADE_HAS_OPENMP
             if (threads > 0) omp_set_num_threads(threads);
 #else
@@ -782,7 +789,9 @@ private:
 #endif
             const cv::Mat image = cv::imread(input, cv::IMREAD_GRAYSCALE);
             if (image.empty()) throw std::runtime_error("Cannot decode input image: " + input);
+            if (cancel_requested_.load(std::memory_order_relaxed)) throw std::runtime_error("Operation cancelled by user.");
             const cv::Mat height_map = cvcascade::make_height_map(image, options);
+            if (cancel_requested_.load(std::memory_order_relaxed)) throw std::runtime_error("Operation cancelled by user.");
             const auto stats = cvcascade::write_stl(height_map, options, output);
             std::ostringstream text;
             text << "Wrote: " << output << "\nResolution: " << stats.cols << " x " << stats.rows
