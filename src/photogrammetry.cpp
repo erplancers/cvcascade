@@ -537,6 +537,7 @@ CameraModel calibrate_camera_from_list(
             model.distortion_coefficients, rotations, translations);
     };
     calibrate();
+    throw_if_cancelled(cancel_requested);
 
     // Robustly remove grossly inconsistent calibration views. Reprojection error is
     // measured per view; the median/MAD threshold is resistant to one bad image.
@@ -581,6 +582,7 @@ CameraModel calibrate_camera_from_list(
             calibrate();
         }
     }
+    throw_if_cancelled(cancel_requested);
     model.calibration_views_used = object_points.size();
 
     cv::FileStorage output(calibration_output.string(), cv::FileStorage::WRITE);
