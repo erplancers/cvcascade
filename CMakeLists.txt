@@ -18,6 +18,7 @@ add_library(cvcascade_core
   src/photogrammetry.cpp
   src/bundle_adjustment.cpp
   src/mesh_topology.cpp
+  src/mesh_viewer.cpp
 )
 target_include_directories(cvcascade_core PUBLIC include)
 target_link_libraries(cvcascade_core PUBLIC
