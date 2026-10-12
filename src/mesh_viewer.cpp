@@ -150,7 +150,9 @@ void MeshViewer::OnPaint(wxPaintEvent&) {
         const auto& t = triangles_[i];
         double da=0,db=0,dc=0;
         DrawFace f{{project(t.a,da),project(t.b,db),project(t.c,dc)},(da+db+dc)/3.0,100};
-        const cv::Vec3d normal=(t.b-t.a).cross(t.c-t.a);
+        const cv::Vec3d ab(t.b.x-t.a.x,t.b.y-t.a.y,t.b.z-t.a.z);
+        const cv::Vec3d ac(t.c.x-t.a.x,t.c.y-t.a.y,t.c.z-t.a.z);
+        const cv::Vec3d normal=ab.cross(ac);
         const double n=cv::norm(normal);
         const double light=n>1e-12?std::abs(normal[2]/n):0.0;
         f.shade=static_cast<int>(65+150*light);
