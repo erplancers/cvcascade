@@ -1,5 +1,6 @@
 #include "cvcascade/mesh_builder.hpp"
 #include "cvcascade/photogrammetry.hpp"
+#include "cvcascade/mesh_viewer.hpp"
 
 #include <wx/wx.h>
 #include <wx/notebook.h>
@@ -108,6 +109,7 @@ public:
         BuildReliefPage();
         BuildCalibrationPage();
         BuildReconstructionPage();
+        BuildMeshInspectionPage();
         root->Add(notebook_, 1, wxEXPAND | wxALL, 10);
 
         auto* status_panel = new wxPanel(this);
@@ -118,6 +120,17 @@ public:
         gauge_ = new wxGauge(status_panel, wxID_ANY, 100, wxDefaultPosition, wxSize(-1, 14));
         status_row->Add(status_, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
         status_row->Add(gauge_, 0, wxALIGN_CENTER_VERTICAL | wxEXPAND, 0);
+        cancel_button_ = new wxButton(status_panel, wxID_ANY, "Cancel task");
+        cancel_button_->Enable(false);
+        status_row->Add(cancel_button_, 0, wxLEFT, 8);
+        cancel_button_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (busy_) {
+                cancel_requested_.store(true, std::memory_order_relaxed);
+                status_->SetLabel("Cancellation requested…");
+                Log("Cancellation requested; waiting for the active native operation to reach a cancellation checkpoint.");
+                cancel_button_->Enable(false);
+            }
+        });
         status_sizer->Add(status_row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 8);
 
         auto* log_label = new wxStaticText(status_panel, wxID_ANY, "Activity log");
@@ -132,12 +145,29 @@ public:
         SetSizer(root);
 
         auto* menu_file = new wxMenu();
+        const int open_project_id = wxWindow::NewControlId();
+        const int save_project_id = wxWindow::NewControlId();
+        const int save_project_as_id = wxWindow::NewControlId();
+        const int load_preset_id = wxWindow::NewControlId();
+        const int save_preset_id = wxWindow::NewControlId();
+        menu_file->Append(open_project_id, "&Open project…\tCtrl+O");
+        menu_file->Append(save_project_id, "&Save project\tCtrl+S");
+        menu_file->Append(save_project_as_id, "Save project &as…");
+        menu_file->AppendSeparator();
+        menu_file->Append(load_preset_id, "Load settings &preset…");
+        menu_file->Append(save_preset_id, "Save settings preset…");
+        menu_file->AppendSeparator();
         menu_file->Append(wxID_ABOUT, "&About CVCascade Studio...");
         menu_file->AppendSeparator();
         menu_file->Append(wxID_EXIT, "E&xit");
         auto* menu_bar = new wxMenuBar();
         menu_bar->Append(menu_file, "&File");
         SetMenuBar(menu_bar);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { LoadProjectDialog(); }, open_project_id);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { SaveProjectDialog(false); }, save_project_id);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { SaveProjectDialog(true); }, save_project_as_id);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { PresetDialog(false); }, load_preset_id);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { PresetDialog(true); }, save_preset_id);
         Bind(wxEVT_MENU, [this](wxCommandEvent&) {
             wxMessageBox(
                 "CVCascade Studio\n\nA C++20 desktop front end for the OpenCV + Open CASCADE "
@@ -168,6 +198,13 @@ private:
     wxTimer timer_;
     std::thread worker_;
     std::atomic_bool busy_{false};
+    std::atomic_bool cancel_requested_{false};
+    wxButton* cancel_button_ = nullptr;
+    std::filesystem::path active_project_;
+    wxTextCtrl* inspection_mesh_path_ = nullptr;
+    wxStaticText* inspection_summary_ = nullptr;
+    MeshViewer* mesh_viewer_ = nullptr;
+    std::shared_ptr<cvcascade::MeshInspection> inspected_mesh_;
 
     // Single-photo relief controls.
     wxTextCtrl* relief_input_ = nullptr;
@@ -266,6 +303,129 @@ private:
         spin->SetDigits(digits);
         spin->SetValue(initial);
         return spin;
+    }
+
+    void SaveStateToFile(const std::filesystem::path& filename, bool include_paths) {
+        cv::FileStorage fs(filename.string(), cv::FileStorage::WRITE | cv::FileStorage::FORMAT_JSON);
+        if (!fs.isOpened()) throw std::runtime_error("Cannot write project/preset file: " + filename.string());
+        fs << "schema_version" << 1;
+        fs << "kind" << (include_paths ? "cvcascade-project" : "cvcascade-preset");
+        auto write_path = [&](const char* key, wxTextCtrl* control) {
+            std::string value = control->GetValue().ToStdString();
+            if (!include_paths) return;
+            if (!value.empty()) {
+                std::error_code ec;
+                auto absolute = std::filesystem::absolute(value, ec);
+                if (!ec) {
+                    auto relative = std::filesystem::relative(absolute, filename.parent_path().empty() ? std::filesystem::current_path() : filename.parent_path(), ec);
+                    if (!ec) value = relative.string(); else value = absolute.string();
+                }
+            }
+            fs << key << value;
+        };
+        auto wi = [&](const char* key, wxSpinCtrl* c) { fs << key << c->GetValue(); };
+        auto wd = [&](const char* key, wxSpinCtrlDouble* c) { fs << key << c->GetValue(); };
+        write_path("relief_input", relief_input_); write_path("relief_output", relief_output_);
+        write_path("calibration_images", calibration_images_); write_path("calibration_output", calibration_output_);
+        write_path("reconstruction_images", reconstruction_images_);
+        write_path("reconstruction_calibration", reconstruction_calibration_);
+        write_path("reconstruction_stl", reconstruction_stl_); write_path("reconstruction_ply", reconstruction_ply_);
+        write_path("reconstruction_report", reconstruction_report_);
+        write_path("inspection_mesh", inspection_mesh_path_);
+        wd("relief_width", relief_width_); wd("relief_height", relief_height_);
+        wi("relief_dimension", relief_dimension_); wi("relief_threads", relief_threads_);
+        fs << "relief_invert" << static_cast<int>(relief_invert_->GetValue());
+        wi("board_cols", board_cols_); wi("board_rows", board_rows_); wd("square_size", square_size_);
+        wi("reconstruction_dimension", reconstruction_dimension_); wi("disparities", disparities_);
+        wi("block_size", block_size_); wi("min_inliers", min_inliers_); wd("baseline_mm", baseline_mm_);
+        wd("max_depth", max_depth_); wd("depth_jump", depth_jump_); wd("lr_tolerance", lr_tolerance_);
+        wd("fusion_voxel", fusion_voxel_); wi("speckle_window", speckle_window_); wi("speckle_range", speckle_range_);
+        fs.release();
+    }
+
+    void LoadStateFromFile(const std::filesystem::path& filename, bool include_paths) {
+        cv::FileStorage fs(filename.string(), cv::FileStorage::READ);
+        if (!fs.isOpened()) throw std::runtime_error("Cannot open project/preset file: " + filename.string());
+        int version = 0; fs["schema_version"] >> version;
+        if (version != 1) throw std::runtime_error("Unsupported project/preset schema version.");
+        auto read_path = [&](const char* key, wxTextCtrl* control) {
+            if (!include_paths || fs[key].empty()) return;
+            std::string value; fs[key] >> value;
+            if (!value.empty()) {
+                std::filesystem::path p(value);
+                if (p.is_relative()) p = filename.parent_path() / p;
+                control->SetValue(std::filesystem::absolute(p).lexically_normal().string());
+            } else control->Clear();
+        };
+        auto ri = [&](const char* key, wxSpinCtrl* c) { int v=c->GetValue(); if(!fs[key].empty()){fs[key]>>v;c->SetValue(v);} };
+        auto rd = [&](const char* key, wxSpinCtrlDouble* c) { double v=c->GetValue(); if(!fs[key].empty()){fs[key]>>v;c->SetValue(v);} };
+        read_path("relief_input", relief_input_); read_path("relief_output", relief_output_);
+        read_path("calibration_images", calibration_images_); read_path("calibration_output", calibration_output_);
+        read_path("reconstruction_images", reconstruction_images_);
+        read_path("reconstruction_calibration", reconstruction_calibration_);
+        read_path("reconstruction_stl", reconstruction_stl_); read_path("reconstruction_ply", reconstruction_ply_);
+        read_path("reconstruction_report", reconstruction_report_); read_path("inspection_mesh", inspection_mesh_path_);
+        rd("relief_width", relief_width_); rd("relief_height", relief_height_);
+        ri("relief_dimension", relief_dimension_); ri("relief_threads", relief_threads_);
+        if (!fs["relief_invert"].empty()) { int v=0; fs["relief_invert"]>>v; relief_invert_->SetValue(v!=0); }
+        ri("board_cols", board_cols_); ri("board_rows", board_rows_); rd("square_size", square_size_);
+        ri("reconstruction_dimension", reconstruction_dimension_); ri("disparities", disparities_);
+        ri("block_size", block_size_); ri("min_inliers", min_inliers_); rd("baseline_mm", baseline_mm_);
+        rd("max_depth", max_depth_); rd("depth_jump", depth_jump_); rd("lr_tolerance", lr_tolerance_);
+        rd("fusion_voxel", fusion_voxel_); ri("speckle_window", speckle_window_); ri("speckle_range", speckle_range_);
+        fs.release();
+        if (include_paths && !inspection_mesh_path_->GetValue().empty()) LoadMeshForInspection();
+    }
+
+    void LoadProjectDialog() {
+        if (busy_) return;
+        wxFileDialog dialog(this, "Open CVCascade project", "", "", "CVCascade project (*.cvcproj;*.json)|*.cvcproj;*.json",
+                            wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+        if (dialog.ShowModal() != wxID_OK) return;
+        try {
+            LoadStateFromFile(dialog.GetPath().ToStdString(), true);
+            active_project_ = dialog.GetPath().ToStdString();
+            Log("Opened project: " + active_project_.string());
+        } catch (const std::exception& e) {
+            wxMessageBox(e.what(), "Project load failed", wxOK | wxICON_ERROR, this);
+        }
+    }
+
+    void SaveProjectDialog(bool force_dialog) {
+        if (busy_) return;
+        std::filesystem::path target = active_project_;
+        if (force_dialog || target.empty()) {
+            wxFileDialog dialog(this, "Save CVCascade project", "", "project.cvcproj",
+                                "CVCascade project (*.cvcproj)|*.cvcproj",
+                                wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+            if (dialog.ShowModal() != wxID_OK) return;
+            target = dialog.GetPath().ToStdString();
+            if (target.extension().empty()) target += ".cvcproj";
+        }
+        try {
+            SaveStateToFile(target, true);
+            active_project_ = target;
+            Log("Saved project: " + target.string());
+        } catch (const std::exception& e) {
+            wxMessageBox(e.what(), "Project save failed", wxOK | wxICON_ERROR, this);
+        }
+    }
+
+    void PresetDialog(bool save) {
+        if (busy_) return;
+        wxFileDialog dialog(this, save ? "Save settings preset" : "Load settings preset", "",
+                            save ? "photogrammetry-preset.json" : "",
+                            "JSON preset (*.json)|*.json", save ? wxFD_SAVE | wxFD_OVERWRITE_PROMPT
+                                                                : wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+        if (dialog.ShowModal() != wxID_OK) return;
+        try {
+            const std::filesystem::path path(dialog.GetPath().ToStdString());
+            if (save) SaveStateToFile(path, false);
+            else LoadStateFromFile(path, false);
+            Log(std::string(save ? "Saved settings preset: " : "Loaded settings preset: ") + path.string());
+        } catch (const std::exception& e) {
+            wxMessageBox(e.what(), "Preset operation failed", wxOK | wxICON_ERROR, this);
+        }
     }
 
     void BuildReliefPage() {
@@ -426,6 +586,110 @@ private:
         page->SetSizer(page_sizer);
     }
 
+    void BuildMeshInspectionPage() {
+        auto* page = new wxPanel(notebook_);
+        notebook_->AddPage(page, "Mesh inspection");
+        auto* root = new wxBoxSizer(wxVERTICAL);
+        auto* intro = new wxStaticText(page, wxID_ANY,
+            "Inspect an STL interactively, orbit with the mouse, zoom with the wheel, validate topology, and export indexed PLY or a JSON validation report.");
+        intro->Wrap(1000);
+        root->Add(intro, 0, wxALL, 8);
+        inspection_mesh_path_ = AddPathRow(page, root, "Mesh to inspect (.stl)", "reconstruction.stl",
+            PickMode::Open, "STL mesh (*.stl)|*.stl|All files|*.*");
+        auto* buttons = new wxBoxSizer(wxHORIZONTAL);
+        auto* load = new wxButton(page, wxID_ANY, "Load and validate STL");
+        auto* export_ply = new wxButton(page, wxID_ANY, "Export indexed PLY…");
+        auto* export_report = new wxButton(page, wxID_ANY, "Save validation JSON…");
+        buttons->Add(load, 0, wxRIGHT, 8); buttons->Add(export_ply, 0, wxRIGHT, 8); buttons->Add(export_report, 0);
+        root->Add(buttons, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+        inspection_summary_ = new wxStaticText(page, wxID_ANY, "No mesh loaded.");
+        inspection_summary_->Wrap(1100);
+        root->Add(inspection_summary_, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+        mesh_viewer_ = new cvcascade::MeshViewer(page);
+        root->Add(mesh_viewer_, 1, wxEXPAND | wxALL, 8);
+        page->SetSizer(root);
+        load->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { LoadMeshForInspection(); });
+        export_ply->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (!inspected_mesh_) {
+                wxMessageBox("Load and validate an STL mesh first.", "No mesh loaded", wxOK | wxICON_INFORMATION, this);
+                return;
+            }
+            wxFileDialog dialog(this, "Export indexed PLY", "", "reconstruction.ply",
+                                "PLY mesh (*.ply)|*.ply", wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+            if (dialog.ShowModal() != wxID_OK) return;
+            const std::string path = dialog.GetPath().ToStdString();
+            const auto mesh = inspected_mesh_;
+            RunJob("PLY export", [mesh, path]() { cvcascade::export_mesh_ply(*mesh, path); return "PLY exported: " + path; });
+        });
+        export_report->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (!inspected_mesh_) {
+                wxMessageBox("Load and validate an STL mesh first.", "No mesh loaded", wxOK | wxICON_INFORMATION, this);
+                return;
+            }
+            wxFileDialog dialog(this, "Save mesh validation report", "", "mesh-validation.json",
+                                "JSON report (*.json)|*.json", wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+            if (dialog.ShowModal() != wxID_OK) return;
+            const std::string path = dialog.GetPath().ToStdString();
+            const auto report = inspected_mesh_->topology;
+            const auto vertices = inspected_mesh_->vertices.size();
+            const auto faces = inspected_mesh_->faces.size();
+            RunJob("Mesh validation report", [path, report, vertices, faces]() {
+                cv::FileStorage fs(path, cv::FileStorage::WRITE | cv::FileStorage::FORMAT_JSON);
+                if (!fs.isOpened()) throw std::runtime_error("Cannot create validation report: " + path);
+                fs << "schema_version" << 1 << "vertices" << static_cast<double>(vertices)
+                   << "faces" << static_cast<double>(faces)
+                   << "degenerate_faces" << static_cast<double>(report.degenerate_faces)
+                   << "duplicate_faces" << static_cast<double>(report.duplicate_faces)
+                   << "boundary_edges" << static_cast<double>(report.boundary_edges)
+                   << "non_manifold_edges" << static_cast<double>(report.non_manifold_edges)
+                   << "connected_components" << static_cast<double>(report.connected_components)
+                   << "watertight" << static_cast<int>(report.watertight());
+                fs.release();
+                return "Mesh validation report saved: " + path;
+            });
+        });
+    }
+
+    void LoadMeshForInspection() {
+        const std::string path = inspection_mesh_path_->GetValue().ToStdString();
+        if (path.empty() || !std::filesystem::is_regular_file(path)) {
+            wxMessageBox("Choose an existing STL mesh file.", "Missing mesh", wxOK | wxICON_WARNING, this);
+            return;
+        }
+        auto result = std::make_shared<cvcascade::MeshInspection>();
+        RunJob("Mesh inspection", [path, result]() {
+            *result = cvcascade::inspect_stl_mesh(path);
+            const auto& t = result->topology;
+            std::ostringstream summary;
+            summary << "Vertices: " << t.vertices << " | Faces: " << t.faces
+                    << " | Components: " << t.connected_components
+                    << " | Boundary edges: " << t.boundary_edges
+                    << " | Non-manifold edges: " << t.non_manifold_edges
+                    << " | Degenerate faces: " << t.degenerate_faces
+                    << " | Duplicate faces: " << t.duplicate_faces
+                    << " | Watertight: " << (t.watertight() ? "yes" : "no");
+            return summary.str();
+        }, [this, result]() {
+            inspected_mesh_ = result;
+            std::vector<cvcascade::MeshViewerTriangle> triangles;
+            triangles.reserve(result->faces.size());
+            for (const auto& f : result->faces)
+                triangles.push_back({result->vertices[f[0]], result->vertices[f[1]], result->vertices[f[2]]});
+            mesh_viewer_->SetMesh(std::move(triangles));
+            const auto& t = result->topology;
+            std::ostringstream summary;
+            summary << "Vertices: " << t.vertices << " | Faces: " << t.faces
+                    << " | Components: " << t.connected_components
+                    << " | Boundary edges: " << t.boundary_edges
+                    << " | Non-manifold: " << t.non_manifold_edges
+                    << " | Degenerate: " << t.degenerate_faces
+                    << " | Duplicate: " << t.duplicate_faces
+                    << " | Watertight: " << (t.watertight() ? "yes" : "no");
+            inspection_summary_->SetLabel(wxString::FromUTF8(summary.str()));
+            Layout();
+        });
+    }
+
     void UpdatePreview(const wxString& path) {
         if (path.empty()) return;
         const cv::Mat image = cv::imread(path.ToStdString(), cv::IMREAD_COLOR);
@@ -450,7 +714,7 @@ private:
         log_->AppendText(wxDateTime::Now().FormatISOTime() + "  " + message + "\n");
     }
 
-    void RunJob(const wxString& label, std::function<std::string()> operation) {
+    void RunJob(const wxString& label, std::function<std::string()> operation, std::function<void()> on_success = {}) {
         if (busy_) {
             wxMessageBox("Another operation is already running.", "CVCascade Studio",
                          wxOK | wxICON_INFORMATION, this);
@@ -458,26 +722,31 @@ private:
         }
         if (worker_.joinable()) worker_.join();
 
+        cancel_requested_.store(false, std::memory_order_relaxed);
         busy_ = true;
+        if (cancel_button_) cancel_button_->Enable(true);
         notebook_->Enable(false);
         gauge_->Pulse();
         status_->SetLabel(label + "…");
         Log("Started: " + label);
         timer_.Start(100);
 
-        worker_ = std::thread([this, label, operation = std::move(operation)]() mutable {
+        worker_ = std::thread([this, label, operation = std::move(operation), on_success = std::move(on_success)]() mutable {
             bool succeeded = false;
             std::string result;
             try {
                 result = operation();
+                if (cancel_requested_.load(std::memory_order_relaxed))
+                    throw std::runtime_error("Operation cancelled by user.");
                 succeeded = true;
             } catch (const std::exception& e) {
                 result = e.what();
             } catch (...) {
                 result = "Unknown non-standard exception.";
             }
-            wxTheApp->CallAfter([this, label, succeeded, result = std::move(result)]() {
+            wxTheApp->CallAfter([this, label, succeeded, result = std::move(result), on_success = std::move(on_success)]() mutable {
                 FinishJob(label, succeeded, result);
+                if (succeeded && on_success) on_success();
             });
         });
     }
@@ -485,18 +754,16 @@ private:
     void FinishJob(const wxString& label, bool succeeded, const std::string& result) {
         if (worker_.joinable()) worker_.join();
         timer_.Stop();
+        const bool cancelled = cancel_requested_.load(std::memory_order_relaxed) && !succeeded;
         gauge_->SetValue(succeeded ? 100 : 0);
         busy_ = false;
+        if (cancel_button_) cancel_button_->Enable(false);
         notebook_->Enable(true);
-        status_->SetLabel(succeeded ? label + " completed." : label + " failed.");
-        Log((succeeded ? "Completed: " : "Failed: ") + label);
+        status_->SetLabel(succeeded ? label + " completed." : (cancelled ? label + " cancelled." : label + " failed."));
+        Log((succeeded ? "Completed: " : (cancelled ? "Cancelled: " : "Failed: ")) + label);
         Log(wxString::FromUTF8(result));
-        if (succeeded)
-            wxMessageBox(wxString::FromUTF8(result), label + " complete",
-                         wxOK | wxICON_INFORMATION, this);
-        else
-            wxMessageBox(wxString::FromUTF8(result), label + " failed",
-                         wxOK | wxICON_ERROR, this);
+        if (!cancelled) wxMessageBox(wxString::FromUTF8(result), label + (succeeded ? " complete" : " failed"),
+                         wxOK | (succeeded ? wxICON_INFORMATION : wxICON_ERROR), this);
     }
 
     void RunRelief() {
@@ -514,7 +781,7 @@ private:
         options.invert = relief_invert_->GetValue();
         const int threads = relief_threads_->GetValue();
 
-        RunJob("Photo relief", [input, output, options, threads]() {
+        RunJob("Photo relief", [this, input, output, options, threads]() {
 #ifdef CVCASCADE_HAS_OPENMP
             if (threads > 0) omp_set_num_threads(threads);
 #else
@@ -522,7 +789,9 @@ private:
 #endif
             const cv::Mat image = cv::imread(input, cv::IMREAD_GRAYSCALE);
             if (image.empty()) throw std::runtime_error("Cannot decode input image: " + input);
+            if (cancel_requested_.load(std::memory_order_relaxed)) throw std::runtime_error("Operation cancelled by user.");
             const cv::Mat height_map = cvcascade::make_height_map(image, options);
+            if (cancel_requested_.load(std::memory_order_relaxed)) throw std::runtime_error("Operation cancelled by user.");
             const auto stats = cvcascade::write_stl(height_map, options, output);
             std::ostringstream text;
             text << "Wrote: " << output << "\nResolution: " << stats.cols << " x " << stats.rows
@@ -543,8 +812,8 @@ private:
                          wxOK | wxICON_WARNING, this);
             return;
         }
-        RunJob("Camera calibration", [images, output, cols, rows, square]() {
-            const auto model = cvcascade::calibrate_camera_from_list(images, output, cols, rows, square);
+        RunJob("Camera calibration", [this, images, output, cols, rows, square]() {
+            const auto model = cvcascade::calibrate_camera_from_list(images, output, cols, rows, square, &cancel_requested_);
             std::ostringstream text;
             text << "Calibration saved: " << output
                  << "\nImage size: " << model.image_size.width << " x " << model.image_size.height
@@ -601,8 +870,8 @@ private:
         options.speckle_window_size = speckle_window_->GetValue();
         options.speckle_range = speckle_range_->GetValue();
 
-        RunJob("Multi-view reconstruction", [images, calibration, stl, ply, report, options]() {
-            const auto stats = cvcascade::reconstruct_multiview(images, calibration, stl, options, ply);
+        RunJob("Multi-view reconstruction", [this, images, calibration, stl, ply, report, options]() {
+            const auto stats = cvcascade::reconstruct_multiview(images, calibration, stl, options, ply, &cancel_requested_);
             const double consistent = stats.stereo_candidates > 0
                 ? 100.0 * static_cast<double>(stats.stereo_consistent) / stats.stereo_candidates : 0.0;
             std::ostringstream text;
@@ -636,8 +905,9 @@ private:
 
     void OnClose(wxCloseEvent& event) {
         if (busy_) {
-            wxMessageBox("A reconstruction task is running in the background. Please wait for it to finish before closing.",
-                         "Task in progress", wxOK | wxICON_INFORMATION, this);
+            cancel_requested_.store(true, std::memory_order_relaxed);
+            wxMessageBox("Cancellation requested. Wait for the current native operation to return before closing.",
+                         "Task cancellation requested", wxOK | wxICON_INFORMATION, this);
             event.Veto();
             return;
         }

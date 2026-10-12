@@ -32,6 +32,12 @@
 namespace cvcascade {
 namespace {
 
+void throw_if_cancelled(const std::atomic_bool* cancel_requested) {
+    if (cancel_requested != nullptr && cancel_requested->load(std::memory_order_relaxed))
+        throw std::runtime_error("Operation cancelled by user.");
+}
+
+
 std::string trim(std::string value) {
     const auto first = value.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return {};
@@ -470,7 +476,8 @@ CameraModel calibrate_camera_from_list(
     const std::filesystem::path& calibration_output,
     int board_cols,
     int board_rows,
-    double square_size_mm) {
+    double square_size_mm,
+    const std::atomic_bool* cancel_requested) {
 
     if (board_cols < 2 || board_rows < 2)
         throw std::invalid_argument("chessboard inner-corner columns and rows must be at least 2");
@@ -484,6 +491,7 @@ CameraModel calibrate_camera_from_list(
     cv::Size image_size;
 
     for (const auto& path : paths) {
+        throw_if_cancelled(cancel_requested);
         const cv::Mat gray = read_gray_image(path);
         if (image_size.empty()) image_size = gray.size();
         if (gray.size() != image_size)
@@ -529,6 +537,7 @@ CameraModel calibrate_camera_from_list(
             model.distortion_coefficients, rotations, translations);
     };
     calibrate();
+    throw_if_cancelled(cancel_requested);
 
     // Robustly remove grossly inconsistent calibration views. Reprojection error is
     // measured per view; the median/MAD threshold is resistant to one bad image.
@@ -573,6 +582,7 @@ CameraModel calibrate_camera_from_list(
             calibrate();
         }
     }
+    throw_if_cancelled(cancel_requested);
     model.calibration_views_used = object_points.size();
 
     cv::FileStorage output(calibration_output.string(), cv::FileStorage::WRITE);
@@ -621,7 +631,8 @@ ReconstructionStats reconstruct_multiview(
     const std::filesystem::path& calibration_path,
     const std::filesystem::path& output_stl,
     const PhotogrammetryOptions& options,
-    const std::filesystem::path& output_ply) {
+    const std::filesystem::path& output_ply,
+    const std::atomic_bool* cancel_requested) {
 
     if (options.max_dimension < 64) throw std::invalid_argument("max-dimension must be at least 64");
     if (options.num_disparities < 16 || options.num_disparities % 16 != 0)
@@ -662,6 +673,7 @@ ReconstructionStats reconstruct_multiview(
     images.reserve(paths.size());
     color_images.reserve(paths.size());
     for (const auto& path : paths) {
+        throw_if_cancelled(cancel_requested);
         images.push_back(resize_image(read_gray_image(path), options.max_dimension));
         if (!output_ply.empty())
             color_images.push_back(resize_image(read_color_image(path), options.max_dimension));
@@ -693,6 +705,7 @@ ReconstructionStats reconstruct_multiview(
     double inlier_ratio_sum = 0.0;
 
     for (std::size_t i = 1; i < images.size(); ++i) {
+        throw_if_cancelled(cancel_requested);
         RelativePose pose = estimate_relative_pose(images[i - 1], images[i], camera, options.min_inliers);
         if (options.baseline_mm > 0.0) {
             const double norm = cv::norm(pose.translation);
@@ -709,6 +722,7 @@ ReconstructionStats reconstruct_multiview(
     }
     // Build persistent tracks across all views, triangulate shared landmarks in the
     // chained-pose initialization, then jointly refine every camera and landmark.
+    throw_if_cancelled(cancel_requested);
     const auto raw_tracks = build_shared_feature_tracks(images, 0.75, 2);
     std::vector<BundleCamera> bundle_cameras(images.size());
     for (std::size_t i = 0; i < images.size(); ++i) {
@@ -725,6 +739,7 @@ ReconstructionStats reconstruct_multiview(
         projections[i] = camera.camera_matrix * extrinsic;
     }
     for (const auto& track : raw_tracks) {
+        throw_if_cancelled(cancel_requested);
         if (track.observations.size() < 2) continue;
         const auto& first = track.observations.front();
         const auto& last = track.observations.back();
@@ -762,6 +777,7 @@ ReconstructionStats reconstruct_multiview(
         }
         bundle_tracks.push_back(std::move(accepted));
     }
+    throw_if_cancelled(cancel_requested);
     if (bundle_tracks.size() >= 8 && bundle_landmarks.size() >= 8) {
         BundleAdjustmentOptions ba_options;
         ba_options.max_iterations = 12;
@@ -796,6 +812,7 @@ ReconstructionStats reconstruct_multiview(
     double valid_ratio_sum = 0.0;
 
     for (std::size_t i = 0; i < pair_poses.size(); ++i) {
+        throw_if_cancelled(cancel_requested);
         const cv::Mat& color_first = output_ply.empty() ? images[i] : color_images[i];
         double valid_ratio = 0.0;
         MeshTopologyReport topology;
@@ -819,10 +836,12 @@ ReconstructionStats reconstruct_multiview(
     if (stats.triangles == 0)
         throw std::runtime_error("dense stereo produced no valid triangles; check overlap, lighting, texture and disparity range");
 
+    throw_if_cancelled(cancel_requested);
     StlAPI_Writer writer;
     if (!writer.Write(compound, output_stl.string().c_str()))
         throw std::runtime_error("Open CASCADE failed to write STL: " + output_stl.string());
 
+    throw_if_cancelled(cancel_requested);
     if (!output_ply.empty()) {
         const auto fused = fuse_point_cloud_voxels(
             cloud_samples, options.fusion_voxel_size, options.min_fusion_observations);
