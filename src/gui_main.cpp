@@ -586,6 +586,105 @@ private:
         page->SetSizer(page_sizer);
     }
 
+    void BuildMeshInspectionPage() {
+        auto* page = new wxPanel(notebook_);
+        notebook_->AddPage(page, "Mesh inspection");
+        auto* root = new wxBoxSizer(wxVERTICAL);
+        auto* intro = new wxStaticText(page, wxID_ANY,
+            "Inspect an STL interactively, orbit with the mouse, zoom with the wheel, validate topology, and export indexed PLY or a JSON validation report.");
+        intro->Wrap(1000);
+        root->Add(intro, 0, wxALL, 8);
+        inspection_mesh_path_ = AddPathRow(page, root, "Mesh to inspect (.stl)", "reconstruction.stl",
+            PickMode::Open, "STL mesh (*.stl)|*.stl|All files|*.*");
+        auto* buttons = new wxBoxSizer(wxHORIZONTAL);
+        auto* load = new wxButton(page, wxID_ANY, "Load and validate STL");
+        auto* export_ply = new wxButton(page, wxID_ANY, "Export indexed PLY…");
+        auto* export_report = new wxButton(page, wxID_ANY, "Save validation JSON…");
+        buttons->Add(load, 0, wxRIGHT, 8); buttons->Add(export_ply, 0, wxRIGHT, 8); buttons->Add(export_report, 0);
+        root->Add(buttons, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+        inspection_summary_ = new wxStaticText(page, wxID_ANY, "No mesh loaded.");
+        inspection_summary_->Wrap(1100);
+        root->Add(inspection_summary_, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+        mesh_viewer_ = new cvcascade::MeshViewer(page);
+        root->Add(mesh_viewer_, 1, wxEXPAND | wxALL, 8);
+        page->SetSizer(root);
+        load->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { LoadMeshForInspection(); });
+        export_ply->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (!inspected_mesh_) {
+                wxMessageBox("Load and validate an STL mesh first.", "No mesh loaded", wxOK | wxICON_INFORMATION, this);
+                return;
+            }
+            wxFileDialog dialog(this, "Export indexed PLY", "", "reconstruction.ply",
+                                "PLY mesh (*.ply)|*.ply", wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+            if (dialog.ShowModal() != wxID_OK) return;
+            const std::string path = dialog.GetPath().ToStdString();
+            const auto mesh = inspected_mesh_;
+            RunJob("PLY export", [mesh, path]() { cvcascade::export_mesh_ply(*mesh, path); return "PLY exported: " + path; });
+        });
+        export_report->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (!inspected_mesh_) {
+                wxMessageBox("Load and validate an STL mesh first.", "No mesh loaded", wxOK | wxICON_INFORMATION, this);
+                return;
+            }
+            wxFileDialog dialog(this, "Save mesh validation report", "", "mesh-validation.json",
+                                "JSON report (*.json)|*.json", wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+            if (dialog.ShowModal() != wxID_OK) return;
+            const std::string path = dialog.GetPath().ToStdString();
+            const auto report = inspected_mesh_->topology;
+            const auto vertices = inspected_mesh_->vertices.size();
+            const auto faces = inspected_mesh_->faces.size();
+            RunJob("Mesh validation report", [path, report, vertices, faces]() {
+                cv::FileStorage fs(path, cv::FileStorage::WRITE | cv::FileStorage::FORMAT_JSON);
+                if (!fs.isOpened()) throw std::runtime_error("Cannot create validation report: " + path);
+                fs << "schema_version" << 1 << "vertices" << static_cast<double>(vertices)
+                   << "faces" << static_cast<double>(faces)
+                   << "degenerate_faces" << static_cast<double>(report.degenerate_faces)
+                   << "duplicate_faces" << static_cast<double>(report.duplicate_faces)
+                   << "boundary_edges" << static_cast<double>(report.boundary_edges)
+                   << "non_manifold_edges" << static_cast<double>(report.non_manifold_edges)
+                   << "connected_components" << static_cast<double>(report.connected_components)
+                   << "watertight" << static_cast<int>(report.watertight());
+                fs.release();
+                return "Mesh validation report saved: " + path;
+            });
+        });
+    }
+
+    void LoadMeshForInspection() {
+        const std::string path = inspection_mesh_path_->GetValue().ToStdString();
+        if (path.empty() || !std::filesystem::is_regular_file(path)) {
+            wxMessageBox("Choose an existing STL mesh file.", "Missing mesh", wxOK | wxICON_WARNING, this);
+            return;
+        }
+        auto result = std::make_shared<cvcascade::MeshInspection>();
+        RunJob("Mesh inspection", [path, result]() {
+            *result = cvcascade::inspect_stl_mesh(path);
+            const auto& t = result->topology;
+            std::ostringstream summary;
+            summary << "Vertices: " << t.vertices << " | Faces: " << t.faces
+                    << " | Components: " << t.connected_components
+                    << " | Boundary edges: " << t.boundary_edges
+                    << " | Non-manifold edges: " << t.non_manifold_edges
+                    << " | Degenerate faces: " << t.degenerate_faces
+                    << " | Duplicate faces: " << t.duplicate_faces
+                    << " | Watertight: " << (t.watertight() ? "yes" : "no");
+            return summary.str();
+        }, [this, result]() {
+            inspected_mesh_ = result;
+            std::vector<cvcascade::MeshViewerTriangle> triangles;
+            triangles.reserve(result->faces.size());
+            for (const auto& f : result->faces)
+                triangles.push_back({result->vertices[f[0]], result->vertices[f[1]], result->vertices[f[2]]});
+            mesh_viewer_->SetMesh(std::move(triangles));
+            const auto& t = result->topology;
+            inspection_summary_->SetLabel(wxString::Format(
+                "Vertices: %zu | Faces: %zu | Components: %zu | Boundary edges: %zu | Non-manifold: %zu | Degenerate: %zu | Duplicate: %zu | Watertight: %s",
+                t.vertices, t.faces, t.connected_components, t.boundary_edges, t.non_manifold_edges,
+                t.degenerate_faces, t.duplicate_faces, t.watertight() ? "yes" : "no"));
+            Layout();
+        });
+    }
+
     void UpdatePreview(const wxString& path) {
         if (path.empty()) return;
         const cv::Mat image = cv::imread(path.ToStdString(), cv::IMREAD_COLOR);
@@ -610,7 +709,7 @@ private:
         log_->AppendText(wxDateTime::Now().FormatISOTime() + "  " + message + "\n");
     }
 
-    void RunJob(const wxString& label, std::function<std::string()> operation) {
+    void RunJob(const wxString& label, std::function<std::string()> operation, std::function<void()> on_success = {}) {
         if (busy_) {
             wxMessageBox("Another operation is already running.", "CVCascade Studio",
                          wxOK | wxICON_INFORMATION, this);
@@ -627,7 +726,7 @@ private:
         Log("Started: " + label);
         timer_.Start(100);
 
-        worker_ = std::thread([this, label, operation = std::move(operation)]() mutable {
+        worker_ = std::thread([this, label, operation = std::move(operation), on_success = std::move(on_success)]() mutable {
             bool succeeded = false;
             std::string result;
             try {
@@ -638,8 +737,9 @@ private:
             } catch (...) {
                 result = "Unknown non-standard exception.";
             }
-            wxTheApp->CallAfter([this, label, succeeded, result = std::move(result)]() {
+            wxTheApp->CallAfter([this, label, succeeded, result = std::move(result), on_success = std::move(on_success)]() mutable {
                 FinishJob(label, succeeded, result);
+                if (succeeded && on_success) on_success();
             });
         });
     }
