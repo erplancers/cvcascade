@@ -2,6 +2,7 @@
 
 #include <opencv2/core.hpp>
 #include <cstdint>
+#include <atomic>
 #include <filesystem>
 #include <vector>
 
@@ -76,7 +77,8 @@ CameraModel calibrate_camera_from_list(
     const std::filesystem::path& calibration_output,
     int board_cols,
     int board_rows,
-    double square_size_mm);
+    double square_size_mm,
+    const std::atomic_bool* cancel_requested = nullptr);
 
 CameraModel load_camera_model(const std::filesystem::path& calibration_path);
 
@@ -94,6 +96,7 @@ ReconstructionStats reconstruct_multiview(
     const std::filesystem::path& calibration_path,
     const std::filesystem::path& output_stl,
     const PhotogrammetryOptions& options,
-    const std::filesystem::path& output_ply = {});
+    const std::filesystem::path& output_ply = {},
+    const std::atomic_bool* cancel_requested = nullptr);
 
 } // namespace cvcascade
