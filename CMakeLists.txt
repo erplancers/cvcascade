@@ -3,41 +3,62 @@ project(cvcascade VERSION 0.3.0 LANGUAGES CXX)
 
 option(CVCASCADE_BUILD_TESTS "Build unit and CLI tests" ON)
 option(CVCASCADE_ENABLE_OPENMP "Enable OpenMP parallel mesh construction" ON)
+option(CVCASCADE_BUILD_GUI "Build the wxWidgets desktop application" ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc calib3d features2d)
-find_package(OpenCASCADE REQUIRED)
-if(CVCASCADE_ENABLE_OPENMP)
-  find_package(OpenMP)
-endif()
+# Third-party libraries are resolved by Conan and exposed through CMakeDeps.
+find_package(OpenCV CONFIG REQUIRED)
+find_package(OpenCASCADE CONFIG REQUIRED)
 
 add_library(cvcascade_core
   src/mesh_builder.cpp
   src/photogrammetry.cpp
 )
 target_include_directories(cvcascade_core PUBLIC include)
-target_include_directories(cvcascade_core SYSTEM PUBLIC
-  ${OpenCV_INCLUDE_DIRS}
-  ${OpenCASCADE_INCLUDE_DIR}
-)
 target_link_libraries(cvcascade_core PUBLIC
-  ${OpenCV_LIBS}
-  TKernel TKG2d TKG3d TKGeomBase TKBRep TKMesh TKSTL
+  opencv_core
+  opencv_imgcodecs
+  opencv_imgproc
+  opencv_calib3d
+  opencv_features2d
+  TKernel
+  TKG2d
+  TKG3d
+  TKGeomBase
+  TKBRep
+  TKMesh
+  TKDESTL
 )
 
-if(OpenMP_CXX_FOUND)
-  target_link_libraries(cvcascade_core PUBLIC OpenMP::OpenMP_CXX)
-  target_compile_definitions(cvcascade_core PUBLIC CVCASCADE_HAS_OPENMP=1)
+if(CVCASCADE_ENABLE_OPENMP)
+  find_package(OpenMP QUIET)
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(cvcascade_core PUBLIC OpenMP::OpenMP_CXX)
+    target_compile_definitions(cvcascade_core PUBLIC CVCASCADE_HAS_OPENMP=1)
+  endif()
 endif()
 
 add_executable(cvcascade src/main.cpp)
 target_link_libraries(cvcascade PRIVATE cvcascade_core)
 
+set(CVCASCADE_INSTALL_TARGETS cvcascade)
+if(CVCASCADE_BUILD_GUI)
+  find_package(wxWidgets CONFIG REQUIRED)
+  # wxIMPLEMENT_APP supplies the Windows GUI entry point (WinMain), not console main().
+  if(WIN32)
+    add_executable(cvcascade_gui WIN32 src/gui_main.cpp)
+  else()
+    add_executable(cvcascade_gui src/gui_main.cpp)
+  endif()
+  target_link_libraries(cvcascade_gui PRIVATE cvcascade_core wxWidgets::wxWidgets)
+  list(APPEND CVCASCADE_INSTALL_TARGETS cvcascade_gui)
+endif()
+
 include(GNUInstallDirs)
-install(TARGETS cvcascade RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS ${CVCASCADE_INSTALL_TARGETS} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 if(CVCASCADE_BUILD_TESTS)
   enable_testing()

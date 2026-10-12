@@ -41,11 +41,18 @@ MeshStats write_stl(const cv::Mat& height_map, const MeshOptions& options, const
     const double dy = options.width * static_cast<double>(rows - 1) / static_cast<double>(cols - 1);
     auto triangulation = new Poly_Triangulation(rows * cols, 2 * (rows - 1) * (cols - 1), Standard_False);
     double min_h = std::numeric_limits<double>::max(), max_h = std::numeric_limits<double>::lowest();
-    // Each iteration writes a unique triangulation node; reductions keep the reported range deterministic.
-    #pragma omp parallel for collapse(2) reduction(min:min_h) reduction(max:max_h)
+    // Compute the range serially for consistent support across OpenMP implementations.
+    for (int y = 0; y < rows; ++y) {
+        for (int x = 0; x < cols; ++x) {
+            const double h = static_cast<double>(height_map.at<float>(y, x));
+            min_h = std::min(min_h, h);
+            max_h = std::max(max_h, h);
+        }
+    }
+    // Each iteration writes a unique triangulation node.
+    #pragma omp parallel for collapse(2)
     for (int y = 0; y < rows; ++y) for (int x = 0; x < cols; ++x) {
         const double h = static_cast<double>(height_map.at<float>(y, x));
-        min_h = std::min(min_h, h); max_h = std::max(max_h, h);
         const double px = x * dx;
         const double py = (rows - 1 - y) * dy / static_cast<double>(rows - 1);
         triangulation->SetNode(y * cols + x + 1, gp_Pnt(px, py, h));

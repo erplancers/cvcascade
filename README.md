@@ -1,6 +1,6 @@
 # cvcascade
 
-A C++20 command-line photogrammetry prototype using **OpenCV** for image processing, camera calibration, feature matching and dense stereo, and **Open CASCADE Technology (OCCT)** for triangulated geometry and STL export. OpenMP is optional for the relief mesh builder. Builds use CMake, Conan 2 and CTest.
+A C++20 command-line photogrammetry prototype using **OpenCV** for image processing, camera calibration, feature matching and dense stereo, and **Open CASCADE Technology (OCCT)** for triangulated geometry and STL export. OpenMP is optional for the relief mesh builder. Includes a wxWidgets desktop workbench as well as the CLI. Builds use CMake, Conan 2 and CTest.
 
 ## Capabilities
 
@@ -11,26 +11,50 @@ A C++20 command-line photogrammetry prototype using **OpenCV** for image process
 - **Speckle/outlier suppression:** disparity speckle filtering, max-depth rejection and relative depth discontinuity rejection before surface triangulation.
 - **Dense colored point cloud:** optional RGB PLY export from the rectified source images.
 - **Voxel-grid fusion:** deterministic voxel downsampling that averages point coordinates and colors to reduce duplicate samples across adjacent stereo pairs.
+- **wxWidgets desktop GUI:** graphical workflows for relief generation, camera calibration, and reconstruction with browse dialogs, image preview, adjustable parameters, background execution, progress indicator, logs, and result summaries.
 - **Reconstruction quality report:** reports feature matches/inliers, pose inlier ratio, valid-depth ratio, stereo consistency counts and mesh size.
 
-## Dependencies and build (Linux)
+## Dependencies and cross-platform build
 
-Requires a C++20 compiler, CMake 3.24+, Conan 2.x, OpenCV modules core/imgcodecs/imgproc/calib3d/features2d, and OCCT development libraries.
+The C++ libraries and CMake build tool are resolved through **Conan 2 / Conan Center**: OpenCV 4.14, Open CASCADE 7.9, wxWidgets 3.2 for the desktop GUI, and CMake. On Linux, wxWidgets' GTK/X11 backend also relies on native graphics/window-system SDK components that Conan Center models with `system` recipes. CI lets Conan install any missing host SDK packages through those recipes; this requires elevated privileges on Linux, so the Linux CI commands run Conan with `sudo`. No manual OS-package list is maintained in CVCascade.
+
+You need Python 3.9+, Conan 2, and a native C++20 compiler/SDK for your operating system (for example, Visual Studio Build Tools on Windows or Xcode Command Line Tools on macOS). The compiler and OS SDK are host toolchain prerequisites; project C++ libraries and the CMake build tool are resolved by Conan.
+
+### Build and test through Conan
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y cmake ninja-build libocct-foundation-dev libocct-modeling-data-dev libocct-modeling-algorithms-dev libocct-data-exchange-dev
-python -m pip install "conan>=2.0,<3.0"
+python -m pip install --upgrade "conan>=2.0,<3.0"
 conan profile detect --force
-conan install . --output-folder=build --build=missing -s build_type=Release
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE=build/build/Release/generators/conan_toolchain.cmake \
-  -DCVCASCADE_BUILD_TESTS=ON
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
+conan create . --build=missing -s build_type=Release -c tools.system.package_manager:mode=install
 ```
 
-If Conan reports another generated toolchain path, use the path printed by Conan. CI installs OCCT and OpenCV from Ubuntu packages to avoid building unrelated optional GUI/media dependencies through Conan. The Conan recipe still supports Conan-managed OpenCV for normal builds.
+`conan create` downloads/builds the required Conan packages, configures and compiles CVCascade, installs the package into the Conan cache, and runs CTest. The default build includes the wxWidgets GUI and all tests.
+
+### Build a local working tree
+
+```bash
+conan profile detect --force
+conan install . --output-folder=build --build=missing -s build_type=Release -c tools.system.package_manager:mode=install
+```
+
+Activate Conan's generated build environment so the CMake executable supplied by Conan is on `PATH`:
+
+- Linux/macOS: `source build/build/Release/generators/conanbuild.sh`
+- Windows Command Prompt: `call build\\build\\Release\\generators\\conanbuild.bat`
+- Windows PowerShell: `. ./build/build/Release/generators/conanbuild.ps1`
+
+Then configure, compile, test, and install:
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_TOOLCHAIN_FILE=build/build/Release/generators/conan_toolchain.cmake \
+  -DCVCASCADE_BUILD_TESTS=ON
+cmake --build build --config Release --parallel
+ctest --test-dir build --build-config Release --output-on-failure
+cmake --install build --config Release --prefix install
+```
+
+The installed executables are in `install/bin` (Windows adds the `.exe` extension). To build the CLI without the desktop UI, use a separate output folder and pass `-o "cvcascade/*:with_gui=False"` to `conan install`; wxWidgets is then not required.
 
 ## 1. Single-image relief
 
