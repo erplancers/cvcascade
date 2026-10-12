@@ -1,5 +1,6 @@
 #include "cvcascade/mesh_builder.hpp"
 #include "cvcascade/photogrammetry.hpp"
+#include "cvcascade/mesh_viewer.hpp"
 
 #include <wx/wx.h>
 #include <wx/notebook.h>
@@ -108,6 +109,7 @@ public:
         BuildReliefPage();
         BuildCalibrationPage();
         BuildReconstructionPage();
+        BuildMeshInspectionPage();
         root->Add(notebook_, 1, wxEXPAND | wxALL, 10);
 
         auto* status_panel = new wxPanel(this);
@@ -118,6 +120,17 @@ public:
         gauge_ = new wxGauge(status_panel, wxID_ANY, 100, wxDefaultPosition, wxSize(-1, 14));
         status_row->Add(status_, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
         status_row->Add(gauge_, 0, wxALIGN_CENTER_VERTICAL | wxEXPAND, 0);
+        cancel_button_ = new wxButton(status_panel, wxID_ANY, "Cancel task");
+        cancel_button_->Enable(false);
+        status_row->Add(cancel_button_, 0, wxLEFT, 8);
+        cancel_button_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (busy_) {
+                cancel_requested_.store(true, std::memory_order_relaxed);
+                status_->SetLabel("Cancellation requested…");
+                Log("Cancellation requested; waiting for the active native operation to reach a cancellation checkpoint.");
+                cancel_button_->Enable(false);
+            }
+        });
         status_sizer->Add(status_row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 8);
 
         auto* log_label = new wxStaticText(status_panel, wxID_ANY, "Activity log");
@@ -132,12 +145,29 @@ public:
         SetSizer(root);
 
         auto* menu_file = new wxMenu();
+        const int open_project_id = wxWindow::NewControlId();
+        const int save_project_id = wxWindow::NewControlId();
+        const int save_project_as_id = wxWindow::NewControlId();
+        const int load_preset_id = wxWindow::NewControlId();
+        const int save_preset_id = wxWindow::NewControlId();
+        menu_file->Append(open_project_id, "&Open project…\\tCtrl+O");
+        menu_file->Append(save_project_id, "&Save project\\tCtrl+S");
+        menu_file->Append(save_project_as_id, "Save project &as…");
+        menu_file->AppendSeparator();
+        menu_file->Append(load_preset_id, "Load settings &preset…");
+        menu_file->Append(save_preset_id, "Save settings preset…");
+        menu_file->AppendSeparator();
         menu_file->Append(wxID_ABOUT, "&About CVCascade Studio...");
         menu_file->AppendSeparator();
         menu_file->Append(wxID_EXIT, "E&xit");
         auto* menu_bar = new wxMenuBar();
         menu_bar->Append(menu_file, "&File");
         SetMenuBar(menu_bar);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { LoadProjectDialog(); }, open_project_id);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { SaveProjectDialog(false); }, save_project_id);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { SaveProjectDialog(true); }, save_project_as_id);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { PresetDialog(false); }, load_preset_id);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { PresetDialog(true); }, save_preset_id);
         Bind(wxEVT_MENU, [this](wxCommandEvent&) {
             wxMessageBox(
                 "CVCascade Studio\n\nA C++20 desktop front end for the OpenCV + Open CASCADE "
@@ -168,6 +198,13 @@ private:
     wxTimer timer_;
     std::thread worker_;
     std::atomic_bool busy_{false};
+    std::atomic_bool cancel_requested_{false};
+    wxButton* cancel_button_ = nullptr;
+    std::filesystem::path active_project_;
+    wxTextCtrl* inspection_mesh_path_ = nullptr;
+    wxStaticText* inspection_summary_ = nullptr;
+    MeshViewer* mesh_viewer_ = nullptr;
+    std::shared_ptr<cvcascade::MeshInspection> inspected_mesh_;
 
     // Single-photo relief controls.
     wxTextCtrl* relief_input_ = nullptr;
@@ -458,7 +495,9 @@ private:
         }
         if (worker_.joinable()) worker_.join();
 
+        cancel_requested_.store(false, std::memory_order_relaxed);
         busy_ = true;
+        if (cancel_button_) cancel_button_->Enable(true);
         notebook_->Enable(false);
         gauge_->Pulse();
         status_->SetLabel(label + "…");
@@ -485,18 +524,16 @@ private:
     void FinishJob(const wxString& label, bool succeeded, const std::string& result) {
         if (worker_.joinable()) worker_.join();
         timer_.Stop();
+        const bool cancelled = cancel_requested_.load(std::memory_order_relaxed) && !succeeded;
         gauge_->SetValue(succeeded ? 100 : 0);
         busy_ = false;
+        if (cancel_button_) cancel_button_->Enable(false);
         notebook_->Enable(true);
-        status_->SetLabel(succeeded ? label + " completed." : label + " failed.");
-        Log((succeeded ? "Completed: " : "Failed: ") + label);
+        status_->SetLabel(succeeded ? label + " completed." : (cancelled ? label + " cancelled." : label + " failed."));
+        Log((succeeded ? "Completed: " : (cancelled ? "Cancelled: " : "Failed: ")) + label);
         Log(wxString::FromUTF8(result));
-        if (succeeded)
-            wxMessageBox(wxString::FromUTF8(result), label + " complete",
-                         wxOK | wxICON_INFORMATION, this);
-        else
-            wxMessageBox(wxString::FromUTF8(result), label + " failed",
-                         wxOK | wxICON_ERROR, this);
+        if (!cancelled) wxMessageBox(wxString::FromUTF8(result), label + (succeeded ? " complete" : " failed"),
+                         wxOK | (succeeded ? wxICON_INFORMATION : wxICON_ERROR), this);
     }
 
     void RunRelief() {
@@ -544,7 +581,7 @@ private:
             return;
         }
         RunJob("Camera calibration", [images, output, cols, rows, square]() {
-            const auto model = cvcascade::calibrate_camera_from_list(images, output, cols, rows, square);
+            const auto model = cvcascade::calibrate_camera_from_list(images, output, cols, rows, square, &cancel_requested_);
             std::ostringstream text;
             text << "Calibration saved: " << output
                  << "\nImage size: " << model.image_size.width << " x " << model.image_size.height
@@ -602,7 +639,7 @@ private:
         options.speckle_range = speckle_range_->GetValue();
 
         RunJob("Multi-view reconstruction", [images, calibration, stl, ply, report, options]() {
-            const auto stats = cvcascade::reconstruct_multiview(images, calibration, stl, options, ply);
+            const auto stats = cvcascade::reconstruct_multiview(images, calibration, stl, options, ply, &cancel_requested_);
             const double consistent = stats.stereo_candidates > 0
                 ? 100.0 * static_cast<double>(stats.stereo_consistent) / stats.stereo_candidates : 0.0;
             std::ostringstream text;
@@ -636,8 +673,9 @@ private:
 
     void OnClose(wxCloseEvent& event) {
         if (busy_) {
-            wxMessageBox("A reconstruction task is running in the background. Please wait for it to finish before closing.",
-                         "Task in progress", wxOK | wxICON_INFORMATION, this);
+            cancel_requested_.store(true, std::memory_order_relaxed);
+            wxMessageBox("Cancellation requested. Wait for the current native operation to return before closing.",
+                         "Task cancellation requested", wxOK | wxICON_INFORMATION, this);
             event.Veto();
             return;
         }
