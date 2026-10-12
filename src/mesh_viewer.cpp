@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <cstdint>
 #include <fstream>
 #include <map>
 #include <stdexcept>
@@ -34,6 +35,7 @@ MeshInspection inspect_stl_mesh(const std::filesystem::path& path) {
     const auto size = in.tellg();
     in.seekg(0);
     if (size < 0) throw std::runtime_error("Cannot determine mesh file size.");
+    const auto file_size = static_cast<std::uint64_t>(static_cast<std::streamoff>(size));
     MeshInspection mesh;
     std::map<std::tuple<double, double, double>, std::size_t> index;
     auto add_vertex = [&](const cv::Point3d& p) {
@@ -50,7 +52,7 @@ MeshInspection inspect_stl_mesh(const std::filesystem::path& path) {
         in.seekg(80);
         std::uint32_t count = 0;
         in.read(reinterpret_cast<char*>(&count), sizeof(count));
-        binary = in && static_cast<std::uint64_t>(size) == 84ULL + 50ULL * count;
+        binary = in && file_size == 84ULL + 50ULL * count;
     }
     in.clear();
     in.seekg(0);
@@ -58,7 +60,7 @@ MeshInspection inspect_stl_mesh(const std::filesystem::path& path) {
         in.seekg(80);
         std::uint32_t count = 0;
         in.read(reinterpret_cast<char*>(&count), sizeof(count));
-        if (count > 5000000U) throw std::runtime_error("Mesh exceeds the 5-million-triangle inspection safety limit.");
+        if (count > 1000000U) throw std::runtime_error("Mesh exceeds the 1-million-triangle inspection safety limit.");
         for (std::uint32_t i = 0; i < count; ++i) {
             (void)read_f32(in); (void)read_f32(in); (void)read_f32(in);
             cv::Point3d p[3] = {read_binary_vertex(in), read_binary_vertex(in), read_binary_vertex(in)};
@@ -77,7 +79,7 @@ MeshInspection inspect_stl_mesh(const std::filesystem::path& path) {
             if (triangle.size() == 3) {
                 mesh.faces.push_back({add_vertex(triangle[0]), add_vertex(triangle[1]), add_vertex(triangle[2])});
                 triangle.clear();
-                if (mesh.faces.size() > 5000000U) throw std::runtime_error("Mesh exceeds the 5-million-triangle inspection safety limit.");
+                if (mesh.faces.size() > 1000000U) throw std::runtime_error("Mesh exceeds the 5-million-triangle inspection safety limit.");
             }
         }
         if (!triangle.empty()) throw std::runtime_error("ASCII STL ends with an incomplete triangle.");
@@ -134,7 +136,8 @@ void MeshViewer::OnPaint(wxPaintEvent&) {
     const double scale = std::max(1e-9, max_abs > 0.0 ? max_abs : 1.0);
     struct DrawFace { std::array<wxPoint,3> p; double depth; int shade; };
     std::vector<DrawFace> draw;
-    draw.reserve(triangles_.size());
+    const std::size_t stride = std::max<std::size_t>(1, triangles_.size() / 150000);
+    draw.reserve((triangles_.size() + stride - 1) / stride);
     const double cy=std::cos(yaw_), sy=std::sin(yaw_), cp=std::cos(pitch_), sp=std::sin(pitch_);
     auto project = [&](const cv::Point3d& point, double& depth) {
         const double x=(point.x-center.x)/scale, y=(point.y-center.y)/scale, z=(point.z-center.z)/scale;
@@ -143,7 +146,8 @@ void MeshViewer::OnPaint(wxPaintEvent&) {
         const double fit=0.40*std::min(size.x,size.y)*zoom_;
         return wxPoint(static_cast<int>(size.x*0.5+rx*fit),static_cast<int>(size.y*0.5-ry*fit));
     };
-    for (const auto& t : triangles_) {
+    for (std::size_t i = 0; i < triangles_.size(); i += stride) {
+        const auto& t = triangles_[i];
         double da=0,db=0,dc=0;
         DrawFace f{{project(t.a,da),project(t.b,db),project(t.c,dc)},(da+db+dc)/3.0,100};
         const cv::Vec3d normal=(t.b-t.a).cross(t.c-t.a);
