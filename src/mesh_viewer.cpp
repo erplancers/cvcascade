@@ -79,7 +79,7 @@ MeshInspection inspect_stl_mesh(const std::filesystem::path& path) {
             if (triangle.size() == 3) {
                 mesh.faces.push_back({add_vertex(triangle[0]), add_vertex(triangle[1]), add_vertex(triangle[2])});
                 triangle.clear();
-                if (mesh.faces.size() > 1000000U) throw std::runtime_error("Mesh exceeds the 5-million-triangle inspection safety limit.");
+                if (mesh.faces.size() > 1000000U) throw std::runtime_error("Mesh exceeds the 1-million-triangle inspection safety limit.");
             }
         }
         if (!triangle.empty()) throw std::runtime_error("ASCII STL ends with an incomplete triangle.");
