@@ -305,6 +305,129 @@ private:
         return spin;
     }
 
+    void SaveStateToFile(const std::filesystem::path& filename, bool include_paths) {
+        cv::FileStorage fs(filename.string(), cv::FileStorage::WRITE | cv::FileStorage::FORMAT_JSON);
+        if (!fs.isOpened()) throw std::runtime_error("Cannot write project/preset file: " + filename.string());
+        fs << "schema_version" << 1;
+        fs << "kind" << (include_paths ? "cvcascade-project" : "cvcascade-preset");
+        auto write_path = [&](const char* key, wxTextCtrl* control) {
+            std::string value = control->GetValue().ToStdString();
+            if (!include_paths) return;
+            if (!value.empty()) {
+                std::error_code ec;
+                auto absolute = std::filesystem::absolute(value, ec);
+                if (!ec) {
+                    auto relative = std::filesystem::relative(absolute, filename.parent_path().empty() ? std::filesystem::current_path() : filename.parent_path(), ec);
+                    if (!ec) value = relative.string(); else value = absolute.string();
+                }
+            }
+            fs << key << value;
+        };
+        auto wi = [&](const char* key, wxSpinCtrl* c) { fs << key << c->GetValue(); };
+        auto wd = [&](const char* key, wxSpinCtrlDouble* c) { fs << key << c->GetValue(); };
+        write_path("relief_input", relief_input_); write_path("relief_output", relief_output_);
+        write_path("calibration_images", calibration_images_); write_path("calibration_output", calibration_output_);
+        write_path("reconstruction_images", reconstruction_images_);
+        write_path("reconstruction_calibration", reconstruction_calibration_);
+        write_path("reconstruction_stl", reconstruction_stl_); write_path("reconstruction_ply", reconstruction_ply_);
+        write_path("reconstruction_report", reconstruction_report_);
+        write_path("inspection_mesh", inspection_mesh_path_);
+        wd("relief_width", relief_width_); wd("relief_height", relief_height_);
+        wi("relief_dimension", relief_dimension_); wi("relief_threads", relief_threads_);
+        fs << "relief_invert" << static_cast<int>(relief_invert_->GetValue());
+        wi("board_cols", board_cols_); wi("board_rows", board_rows_); wd("square_size", square_size_);
+        wi("reconstruction_dimension", reconstruction_dimension_); wi("disparities", disparities_);
+        wi("block_size", block_size_); wi("min_inliers", min_inliers_); wd("baseline_mm", baseline_mm_);
+        wd("max_depth", max_depth_); wd("depth_jump", depth_jump_); wd("lr_tolerance", lr_tolerance_);
+        wd("fusion_voxel", fusion_voxel_); wi("speckle_window", speckle_window_); wi("speckle_range", speckle_range_);
+        fs.release();
+    }
+
+    void LoadStateFromFile(const std::filesystem::path& filename, bool include_paths) {
+        cv::FileStorage fs(filename.string(), cv::FileStorage::READ);
+        if (!fs.isOpened()) throw std::runtime_error("Cannot open project/preset file: " + filename.string());
+        int version = 0; fs["schema_version"] >> version;
+        if (version != 1) throw std::runtime_error("Unsupported project/preset schema version.");
+        auto read_path = [&](const char* key, wxTextCtrl* control) {
+            if (!include_paths || fs[key].empty()) return;
+            std::string value; fs[key] >> value;
+            if (!value.empty()) {
+                std::filesystem::path p(value);
+                if (p.is_relative()) p = filename.parent_path() / p;
+                control->SetValue(std::filesystem::absolute(p).lexically_normal().string());
+            } else control->Clear();
+        };
+        auto ri = [&](const char* key, wxSpinCtrl* c) { int v=c->GetValue(); if(!fs[key].empty()){fs[key]>>v;c->SetValue(v);} };
+        auto rd = [&](const char* key, wxSpinCtrlDouble* c) { double v=c->GetValue(); if(!fs[key].empty()){fs[key]>>v;c->SetValue(v);} };
+        read_path("relief_input", relief_input_); read_path("relief_output", relief_output_);
+        read_path("calibration_images", calibration_images_); read_path("calibration_output", calibration_output_);
+        read_path("reconstruction_images", reconstruction_images_);
+        read_path("reconstruction_calibration", reconstruction_calibration_);
+        read_path("reconstruction_stl", reconstruction_stl_); read_path("reconstruction_ply", reconstruction_ply_);
+        read_path("reconstruction_report", reconstruction_report_); read_path("inspection_mesh", inspection_mesh_path_);
+        rd("relief_width", relief_width_); rd("relief_height", relief_height_);
+        ri("relief_dimension", relief_dimension_); ri("relief_threads", relief_threads_);
+        if (!fs["relief_invert"].empty()) { int v=0; fs["relief_invert"]>>v; relief_invert_->SetValue(v!=0); }
+        ri("board_cols", board_cols_); ri("board_rows", board_rows_); rd("square_size", square_size_);
+        ri("reconstruction_dimension", reconstruction_dimension_); ri("disparities", disparities_);
+        ri("block_size", block_size_); ri("min_inliers", min_inliers_); rd("baseline_mm", baseline_mm_);
+        rd("max_depth", max_depth_); rd("depth_jump", depth_jump_); rd("lr_tolerance", lr_tolerance_);
+        rd("fusion_voxel", fusion_voxel_); ri("speckle_window", speckle_window_); ri("speckle_range", speckle_range_);
+        fs.release();
+        if (include_paths && !inspection_mesh_path_->GetValue().empty()) LoadMeshForInspection();
+    }
+
+    void LoadProjectDialog() {
+        if (busy_) return;
+        wxFileDialog dialog(this, "Open CVCascade project", "", "", "CVCascade project (*.cvcproj;*.json)|*.cvcproj;*.json",
+                            wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+        if (dialog.ShowModal() != wxID_OK) return;
+        try {
+            LoadStateFromFile(dialog.GetPath().ToStdString(), true);
+            active_project_ = dialog.GetPath().ToStdString();
+            Log("Opened project: " + active_project_.string());
+        } catch (const std::exception& e) {
+            wxMessageBox(e.what(), "Project load failed", wxOK | wxICON_ERROR, this);
+        }
+    }
+
+    void SaveProjectDialog(bool force_dialog) {
+        if (busy_) return;
+        std::filesystem::path target = active_project_;
+        if (force_dialog || target.empty()) {
+            wxFileDialog dialog(this, "Save CVCascade project", "", "project.cvcproj",
+                                "CVCascade project (*.cvcproj)|*.cvcproj",
+                                wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+            if (dialog.ShowModal() != wxID_OK) return;
+            target = dialog.GetPath().ToStdString();
+            if (target.extension().empty()) target += ".cvcproj";
+        }
+        try {
+            SaveStateToFile(target, true);
+            active_project_ = target;
+            Log("Saved project: " + target.string());
+        } catch (const std::exception& e) {
+            wxMessageBox(e.what(), "Project save failed", wxOK | wxICON_ERROR, this);
+        }
+    }
+
+    void PresetDialog(bool save) {
+        if (busy_) return;
+        wxFileDialog dialog(this, save ? "Save settings preset" : "Load settings preset", "",
+                            save ? "photogrammetry-preset.json" : "",
+                            "JSON preset (*.json)|*.json", save ? wxFD_SAVE | wxFD_OVERWRITE_PROMPT
+                                                                : wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+        if (dialog.ShowModal() != wxID_OK) return;
+        try {
+            const std::filesystem::path path(dialog.GetPath().ToStdString());
+            if (save) SaveStateToFile(path, false);
+            else LoadStateFromFile(path, false);
+            Log(std::string(save ? "Saved settings preset: " : "Loaded settings preset: ") + path.string());
+        } catch (const std::exception& e) {
+            wxMessageBox(e.what(), "Preset operation failed", wxOK | wxICON_ERROR, this);
+        }
+    }
+
     void BuildReliefPage() {
         auto* page = new wxPanel(notebook_);
         notebook_->AddPage(page, "Photo relief");
@@ -580,7 +703,7 @@ private:
                          wxOK | wxICON_WARNING, this);
             return;
         }
-        RunJob("Camera calibration", [images, output, cols, rows, square]() {
+        RunJob("Camera calibration", [this, images, output, cols, rows, square]() {
             const auto model = cvcascade::calibrate_camera_from_list(images, output, cols, rows, square, &cancel_requested_);
             std::ostringstream text;
             text << "Calibration saved: " << output
@@ -638,7 +761,7 @@ private:
         options.speckle_window_size = speckle_window_->GetValue();
         options.speckle_range = speckle_range_->GetValue();
 
-        RunJob("Multi-view reconstruction", [images, calibration, stl, ply, report, options]() {
+        RunJob("Multi-view reconstruction", [this, images, calibration, stl, ply, report, options]() {
             const auto stats = cvcascade::reconstruct_multiview(images, calibration, stl, options, ply, &cancel_requested_);
             const double consistent = stats.stereo_candidates > 0
                 ? 100.0 * static_cast<double>(stats.stereo_consistent) / stats.stereo_candidates : 0.0;
