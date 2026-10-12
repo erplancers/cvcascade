@@ -30,6 +30,54 @@ namespace {
 
 enum class PickMode { Open, Save };
 
+void WriteQualityReport(const std::string& filename, const std::string& stl,
+                        const std::string& ply, const cvcascade::ReconstructionStats& stats) {
+    const std::filesystem::path path(filename);
+    if (!path.parent_path().empty() && !std::filesystem::exists(path.parent_path()))
+        throw std::runtime_error("Report directory does not exist: " + path.parent_path().string());
+    const std::filesystem::path temporary(path.string() + ".tmp");
+    cv::FileStorage report(temporary.string(), cv::FileStorage::WRITE | cv::FileStorage::FORMAT_JSON);
+    if (!report.isOpened()) throw std::runtime_error("Cannot create quality report: " + temporary.string());
+    report << "schema_version" << 1
+           << "images" << static_cast<double>(stats.images)
+           << "registered_pairs" << static_cast<double>(stats.registered_pairs)
+           << "feature_matches" << static_cast<double>(stats.feature_matches)
+           << "shared_tracks" << static_cast<double>(stats.shared_tracks)
+           << "bundle_observations" << static_cast<double>(stats.bundle_observations)
+           << "bundle_iterations" << static_cast<double>(stats.bundle_iterations)
+           << "bundle_initial_rmse_px" << stats.bundle_initial_rmse
+           << "bundle_final_rmse_px" << stats.bundle_final_rmse
+           << "pose_inliers" << static_cast<double>(stats.pose_inliers)
+           << "mean_pose_inlier_ratio" << stats.mean_pose_inlier_ratio
+           << "mean_valid_depth_ratio" << stats.mean_valid_depth_ratio
+           << "stereo_candidates" << static_cast<double>(stats.stereo_candidates)
+           << "stereo_consistent" << static_cast<double>(stats.stereo_consistent)
+           << "stereo_rejected" << static_cast<double>(stats.stereo_rejected)
+           << "vertices" << static_cast<double>(stats.vertices)
+           << "triangles" << static_cast<double>(stats.triangles)
+           << "boundary_edges" << static_cast<double>(stats.mesh_boundary_edges)
+           << "non_manifold_edges" << static_cast<double>(stats.mesh_non_manifold_edges)
+           << "degenerate_faces_removed" << static_cast<double>(stats.mesh_degenerate_faces_removed)
+           << "duplicate_faces_removed" << static_cast<double>(stats.mesh_duplicate_faces_removed)
+           << "fused_points" << static_cast<double>(stats.fused_points)
+           << "fusion_voxels_rejected" << static_cast<double>(stats.fusion_voxels_rejected)
+           << "applied_scale_factor" << stats.applied_scale_factor
+           << "metric_scale" << static_cast<int>(stats.metric_scale)
+           << "outputs" << "{"
+           << "stl" << stl
+           << "ply" << ply
+           << "}";
+    report.release();
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    ec.clear();
+    std::filesystem::rename(temporary, path, ec);
+    if (ec) {
+        std::filesystem::remove(temporary);
+        throw std::runtime_error("Cannot finalize quality report: " + ec.message());
+    }
+}
+
 class MainFrame final : public wxFrame {
 public:
     MainFrame()
@@ -144,6 +192,7 @@ private:
     wxTextCtrl* reconstruction_calibration_ = nullptr;
     wxTextCtrl* reconstruction_stl_ = nullptr;
     wxTextCtrl* reconstruction_ply_ = nullptr;
+    wxTextCtrl* reconstruction_report_ = nullptr;
     wxSpinCtrl* reconstruction_dimension_ = nullptr;
     wxSpinCtrl* disparities_ = nullptr;
     wxSpinCtrl* block_size_ = nullptr;
@@ -324,6 +373,8 @@ private:
             PickMode::Save, "STL mesh (*.stl)|*.stl|All files|*.*");
         reconstruction_ply_ = AddPathRow(scroller, files, "Optional RGB point cloud (.ply)", "reconstruction.ply",
             PickMode::Save, "PLY point cloud (*.ply)|*.ply|All files|*.*");
+        reconstruction_report_ = AddPathRow(scroller, files, "Quality report (.json)", "reconstruction-report.json",
+            PickMode::Save, "JSON report (*.json)|*.json|All files|*.*");
         outer->Add(files, 0, wxEXPAND | wxLEFT | wxRIGHT, 8);
 
         auto* settings = new wxStaticBoxSizer(wxVERTICAL, scroller, "Stereo, filtering and fusion");
@@ -362,7 +413,7 @@ private:
 
         auto* note = new wxStaticText(scroller, wxID_ANY,
             "Without a known baseline, scale and voxel size are arbitrary. Voxel fusion affects PLY; "
-            "the STL retains per-pair surfaces. Global bundle adjustment and watertight repair are not implemented.");
+            "the STL retains per-pair surfaces. Review bundle-adjustment and mesh-topology diagnostics; conservative repair does not guarantee watertightness.");
         note->Wrap(1000);
         outer->Add(note, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
         auto* run = new wxButton(scroller, wxID_ANY, "Reconstruct mesh and point cloud");
@@ -507,14 +558,32 @@ private:
         const std::string calibration = reconstruction_calibration_->GetValue().ToStdString();
         const std::string stl = reconstruction_stl_->GetValue().ToStdString();
         const std::string ply = reconstruction_ply_->GetValue().ToStdString();
+        const std::string report = reconstruction_report_->GetValue().ToStdString();
         if (images.empty() || calibration.empty() || stl.empty()) {
             wxMessageBox("Choose the image manifest, camera calibration, and output STL paths.",
                          "Missing input", wxOK | wxICON_WARNING, this);
             return;
         }
-        if (!ply.empty() && std::filesystem::path(ply).lexically_normal() ==
-                            std::filesystem::path(stl).lexically_normal()) {
-            wxMessageBox("STL and PLY output paths must be different.", "Invalid output paths",
+        if (!std::filesystem::is_regular_file(images) || !std::filesystem::is_regular_file(calibration)) {
+            wxMessageBox("The image manifest and calibration must both exist and be readable files.",
+                         "Missing input file", wxOK | wxICON_WARNING, this);
+            return;
+        }
+        const int max_dimension = reconstruction_dimension_->GetValue();
+        const int disparity_count = disparities_->GetValue();
+        const int selected_block_size = block_size_->GetValue();
+        if (disparity_count <= 0 || disparity_count % 16 != 0 || disparity_count >= max_dimension ||
+            selected_block_size < 3 || selected_block_size % 2 == 0) {
+            wxMessageBox("Disparities must be a positive multiple of 16 smaller than the maximum image dimension; block size must be odd and at least 3.",
+                         "Invalid stereo settings", wxOK | wxICON_WARNING, this);
+            return;
+        }
+        const auto normalized_stl = std::filesystem::absolute(stl).lexically_normal();
+        const auto normalized_ply = ply.empty() ? std::filesystem::path{} : std::filesystem::absolute(ply).lexically_normal();
+        const auto normalized_report = report.empty() ? std::filesystem::path{} : std::filesystem::absolute(report).lexically_normal();
+        if ((!ply.empty() && normalized_ply == normalized_stl) ||
+            (!report.empty() && (normalized_report == normalized_stl || (!ply.empty() && normalized_report == normalized_ply)))) {
+            wxMessageBox("STL, PLY, and JSON report output paths must be different.", "Invalid output paths",
                          wxOK | wxICON_WARNING, this);
             return;
         }
@@ -532,7 +601,7 @@ private:
         options.speckle_window_size = speckle_window_->GetValue();
         options.speckle_range = speckle_range_->GetValue();
 
-        RunJob("Multi-view reconstruction", [images, calibration, stl, ply, options]() {
+        RunJob("Multi-view reconstruction", [images, calibration, stl, ply, report, options]() {
             const auto stats = cvcascade::reconstruct_multiview(images, calibration, stl, options, ply);
             const double consistent = stats.stereo_candidates > 0
                 ? 100.0 * static_cast<double>(stats.stereo_consistent) / stats.stereo_candidates : 0.0;
@@ -541,6 +610,9 @@ private:
                  << "\nImages: " << stats.images
                  << "\nPairs with triangles: " << stats.registered_pairs
                  << "\nFeature matches: " << stats.feature_matches
+                 << "\nShared multi-view tracks: " << stats.shared_tracks
+                 << "\nBundle observations / iterations: " << stats.bundle_observations << " / " << stats.bundle_iterations
+                 << "\nBundle reprojection RMSE (initial -> final): " << stats.bundle_initial_rmse << " -> " << stats.bundle_final_rmse << " px"
                  << "\nPose inliers: " << stats.pose_inliers
                  << "\nMean pose inlier ratio: " << stats.mean_pose_inlier_ratio
                  << "\nMean valid-depth ratio: " << stats.mean_valid_depth_ratio
@@ -548,9 +620,16 @@ private:
                  << "\nStereo candidates / consistent / rejected: "
                  << stats.stereo_candidates << " / " << stats.stereo_consistent << " / " << stats.stereo_rejected
                  << "\nMesh vertices / triangles: " << stats.vertices << " / " << stats.triangles
+                 << "\nBoundary / non-manifold edges: " << stats.mesh_boundary_edges << " / " << stats.mesh_non_manifold_edges
+                 << "\nDegenerate / duplicate faces removed: " << stats.mesh_degenerate_faces_removed << " / " << stats.mesh_duplicate_faces_removed
+                 << "\nApplied scale factor: " << stats.applied_scale_factor
                  << "\nScale: " << (stats.metric_scale ? "baseline-scaled (approximate)" : "arbitrary")
                  << "\n";
             if (!ply.empty()) text << "Fused RGB PLY: " << ply << "\nPoints: " << stats.fused_points;
+            if (!report.empty()) {
+                WriteQualityReport(report, stl, ply, stats);
+                text << "\nQuality report: " << report;
+            }
             return text.str();
         });
     }
