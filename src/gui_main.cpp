@@ -141,6 +141,8 @@ public:
         auto* menu_bar = new wxMenuBar();
         menu_bar->Append(menu_file, "&File");
         SetMenuBar(menu_bar);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { OpenProject(); }, 2001);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { SaveProject(); }, 2002);
         Bind(wxEVT_MENU, [this](wxCommandEvent&) {
             wxMessageBox(
                 "CVCascade Studio\n\nA C++20 desktop front end for the OpenCV + Open CASCADE "
@@ -540,7 +542,9 @@ private:
         }
         if (worker_.joinable()) worker_.join();
 
+        cancel_requested_.store(false, std::memory_order_relaxed);
         busy_ = true;
+        cancel_button_->Enable(true);
         notebook_->Enable(false);
         gauge_->Pulse();
         status_->SetLabel(label + "…");
@@ -549,34 +553,39 @@ private:
 
         worker_ = std::thread([this, label, operation = std::move(operation)]() mutable {
             bool succeeded = false;
+            bool cancelled = false;
             std::string result;
             try {
+                if (cancel_requested_.load(std::memory_order_relaxed)) throw std::runtime_error("Task cancelled by user.");
                 result = operation();
+                if (cancel_requested_.load(std::memory_order_relaxed)) throw std::runtime_error("Task cancelled by user.");
                 succeeded = true;
             } catch (const std::exception& e) {
                 result = e.what();
+                cancelled = cancel_requested_.load(std::memory_order_relaxed) || result.find("cancelled by user") != std::string::npos;
             } catch (...) {
                 result = "Unknown non-standard exception.";
             }
-            wxTheApp->CallAfter([this, label, succeeded, result = std::move(result)]() {
-                FinishJob(label, succeeded, result);
+            wxTheApp->CallAfter([this, label, succeeded, cancelled, result = std::move(result)]() {
+                FinishJob(label, succeeded, cancelled, result);
             });
         });
     }
 
-    void FinishJob(const wxString& label, bool succeeded, const std::string& result) {
+    void FinishJob(const wxString& label, bool succeeded, bool cancelled, const std::string& result) {
         if (worker_.joinable()) worker_.join();
         timer_.Stop();
         gauge_->SetValue(succeeded ? 100 : 0);
         busy_ = false;
+        cancel_button_->Enable(false);
         notebook_->Enable(true);
-        status_->SetLabel(succeeded ? label + " completed." : label + " failed.");
-        Log((succeeded ? "Completed: " : "Failed: ") + label);
+        status_->SetLabel(succeeded ? label + " completed." : (cancelled ? label + " cancelled." : label + " failed."));
+        Log((succeeded ? "Completed: " : (cancelled ? "Cancelled: " : "Failed: ")) + label);
         Log(wxString::FromUTF8(result));
         if (succeeded)
             wxMessageBox(wxString::FromUTF8(result), label + " complete",
                          wxOK | wxICON_INFORMATION, this);
-        else
+        else if (!cancelled)
             wxMessageBox(wxString::FromUTF8(result), label + " failed",
                          wxOK | wxICON_ERROR, this);
     }
@@ -681,7 +690,8 @@ private:
         options.left_right_tolerance = lr_tolerance_->GetValue();
         options.fusion_voxel_size = fusion_voxel_->GetValue();
         options.speckle_window_size = speckle_window_->GetValue();
-        options.speckle_range = speckle_range_->GetValue();\n        options.cancellation_flag = &cancel_requested_;
+        options.speckle_range = speckle_range_->GetValue();
+        options.cancellation_flag = &cancel_requested_;
 
         RunJob("Multi-view reconstruction", [images, calibration, stl, ply, report, options]() {
             const auto stats = cvcascade::reconstruct_multiview(images, calibration, stl, options, ply);
@@ -783,7 +793,8 @@ private:
         string_value("reconstruction_calibration", reconstruction_calibration_);
         string_value("reconstruction_stl", reconstruction_stl_);
         string_value("reconstruction_ply", reconstruction_ply_);
-        string_value("reconstruction_report", reconstruction_report_);\n        string_value("mesh_path", mesh_path_);
+        string_value("reconstruction_report", reconstruction_report_);
+        string_value("mesh_path", mesh_path_);
         int_value("reconstruction_dimension", reconstruction_dimension_);
         int_value("disparities", disparities_);
         int_value("block_size", block_size_);
@@ -826,7 +837,8 @@ private:
             fs["schema_version"] >> version;
             if (version != 1) throw std::runtime_error("Unsupported or missing project schema_version.");
             ReadSettings(fs, preset_only);
-            if (!preset_only && !relief_input_->GetValue().empty()) UpdatePreview(relief_input_->GetValue());\n            if (!preset_only && !mesh_path_->GetValue().empty()) LoadMeshFromPath(mesh_path_->GetValue());
+            if (!preset_only && !relief_input_->GetValue().empty()) UpdatePreview(relief_input_->GetValue());
+            if (!preset_only && !mesh_path_->GetValue().empty()) LoadMeshFromPath(mesh_path_->GetValue());
             Log(std::string(preset_only ? "Loaded preset: " : "Opened project: ") + dialog.GetPath().ToStdString());
         } catch (const std::exception& e) {
             wxMessageBox(wxString::FromUTF8(e.what()), "Load failed", wxOK | wxICON_ERROR, this);
