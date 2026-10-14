@@ -12,6 +12,9 @@ A C++20 command-line photogrammetry prototype using **OpenCV** for image process
 - **Dense colored point cloud:** optional RGB PLY export from the rectified source images.
 - **Voxel-grid fusion:** deterministic voxel downsampling that averages point coordinates and colors to reduce duplicate samples across adjacent stereo pairs.
 - **wxWidgets desktop GUI:** graphical workflows for relief generation, camera calibration, and reconstruction with browse dialogs, image preview, adjustable parameters, background execution, progress indicator, logs, and result summaries.
+- **Cancellable reconstruction jobs:** the GUI exposes a cancel action, with cooperative checks between reconstruction phases and during dense mesh row processing. An active OpenCV matching/calibration kernel may finish before cancellation takes effect.
+- **Persistent projects and presets:** save/load schema-versioned YAML project files for workflow paths and parameters; save/load reusable reconstruction presets independently.
+- **Interactive STL viewer and validation/export panel:** load binary or ASCII STL, rotate by dragging, zoom with the wheel, inspect bounds, triangle count, degenerate faces and non-finite coordinates, export a JSON inspection report, or copy the STL to another path.
 - **GUI quality reports:** reconstruction can export a versioned JSON sidecar containing shared tracks, bundle-adjustment convergence, stereo consistency, mesh topology diagnostics, scale status, and output paths. The GUI validates manifest/calibration existence, stereo disparity/block-size constraints, and output-path collisions before launching a reconstruction.
 - **Reconstruction quality report:** console metrics plus optional machine-readable JSON output (`--report report.json`) with feature matches/inliers, pose inlier ratio, valid-depth ratio, stereo consistency counts, mesh size, and scale status.
 
@@ -56,6 +59,10 @@ cmake --install build --config Release --prefix install
 ```
 
 The installed executables are in `install/bin` (Windows adds the `.exe` extension). To build the CLI without the desktop UI, use a separate output folder and pass `-o "cvcascade/*:with_gui=False"` to `conan install`; wxWidgets is then not required.
+
+## Desktop workbench additions
+
+In CVCascade Studio, use **File → Open project / Save project** to persist the current paths and settings in a versioned YAML file. On the reconstruction tab, **Save settings preset / Load settings preset** stores reusable reconstruction settings. The **Mesh validation & viewer** tab loads STL meshes, supports drag-to-rotate and mouse-wheel zoom, reports basic file and geometry diagnostics, exports a machine-readable JSON inspection report, and can write a copy of an STL. These checks are deliberately conservative: they detect malformed coordinates and degenerate triangles but do not prove watertightness, manifold topology, or dimensional accuracy. Cancellation is cooperative; some OpenCV operations cannot be interrupted mid-kernel.
 
 ## 1. Single-image relief
 

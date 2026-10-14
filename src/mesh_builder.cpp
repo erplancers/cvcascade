@@ -11,7 +11,14 @@
 #include <limits>
 #include <stdexcept>
 namespace cvcascade {
+namespace {
+void check_cancel(const std::atomic_bool* flag) {
+    if (flag != nullptr && flag->load(std::memory_order_relaxed))
+        throw std::runtime_error("Task cancelled by user.");
+}
+}
 cv::Mat make_height_map(const cv::Mat& grayscale, const MeshOptions& options) {
+    check_cancel(options.cancellation_flag);
     if (grayscale.empty()) throw std::invalid_argument("input image is empty");
     if (grayscale.channels() != 1) throw std::invalid_argument("height map requires a single-channel grayscale image");
     if (!(options.width > 0.0) || !(options.max_height >= 0.0) ||
@@ -28,9 +35,11 @@ cv::Mat make_height_map(const cv::Mat& grayscale, const MeshOptions& options) {
     resized.convertTo(normalized, CV_32F, 1.0 / 255.0);
     if (options.invert) normalized = 1.0F - normalized;
     normalized *= static_cast<float>(options.max_height);
+    check_cancel(options.cancellation_flag);
     return normalized;
 }
 MeshStats write_stl(const cv::Mat& height_map, const MeshOptions& options, const std::string& output_path) {
+    check_cancel(options.cancellation_flag);
     if (height_map.empty() || height_map.type() != CV_32F || height_map.rows < 2 || height_map.cols < 2)
         throw std::invalid_argument("height map must be a non-empty CV_32F matrix at least 2x2");
     if (!(options.width > 0.0) || !std::isfinite(options.width))
@@ -43,6 +52,7 @@ MeshStats write_stl(const cv::Mat& height_map, const MeshOptions& options, const
     double min_h = std::numeric_limits<double>::max(), max_h = std::numeric_limits<double>::lowest();
     // Compute the range serially for consistent support across OpenMP implementations.
     for (int y = 0; y < rows; ++y) {
+        if ((y & 31) == 0) check_cancel(options.cancellation_flag);
         for (int x = 0; x < cols; ++x) {
             const double h = static_cast<double>(height_map.at<float>(y, x));
             min_h = std::min(min_h, h);
@@ -50,6 +60,7 @@ MeshStats write_stl(const cv::Mat& height_map, const MeshOptions& options, const
         }
     }
     // Each iteration writes a unique triangulation node.
+    check_cancel(options.cancellation_flag);
     #pragma omp parallel for collapse(2)
     for (int y = 0; y < rows; ++y) for (int x = 0; x < cols; ++x) {
         const double h = static_cast<double>(height_map.at<float>(y, x));
@@ -57,6 +68,7 @@ MeshStats write_stl(const cv::Mat& height_map, const MeshOptions& options, const
         const double py = (rows - 1 - y) * dy / static_cast<double>(rows - 1);
         triangulation->SetNode(y * cols + x + 1, gp_Pnt(px, py, h));
     }
+    check_cancel(options.cancellation_flag);
     #pragma omp parallel for collapse(2)
     for (int y = 0; y < rows - 1; ++y) for (int x = 0; x < cols - 1; ++x) {
         const int a = y * cols + x + 1, b = a + 1, c = (y + 1) * cols + x + 1, d = c + 1;
@@ -64,6 +76,7 @@ MeshStats write_stl(const cv::Mat& height_map, const MeshOptions& options, const
         triangulation->SetTriangle(first, Poly_Triangle(a, b, d));
         triangulation->SetTriangle(first + 1, Poly_Triangle(a, d, c));
     }
+    check_cancel(options.cancellation_flag);
     TopoDS_Face face;
     BRep_Builder builder;
     builder.MakeFace(face, triangulation);

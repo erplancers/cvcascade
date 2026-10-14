@@ -1,6 +1,7 @@
 #pragma once
 
 #include <opencv2/core.hpp>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -17,6 +18,8 @@ struct CameraModel {
 };
 
 struct PhotogrammetryOptions {
+    // Optional cooperative cancellation flag owned by the caller.
+    const std::atomic_bool* cancellation_flag = nullptr;
     int max_dimension = 640;
     int num_disparities = 128;
     int block_size = 5;
@@ -76,7 +79,8 @@ CameraModel calibrate_camera_from_list(
     const std::filesystem::path& calibration_output,
     int board_cols,
     int board_rows,
-    double square_size_mm);
+    double square_size_mm,
+    const std::atomic_bool* cancellation_flag = nullptr);
 
 CameraModel load_camera_model(const std::filesystem::path& calibration_path);
 

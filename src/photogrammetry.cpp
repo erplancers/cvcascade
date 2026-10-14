@@ -32,6 +32,15 @@
 namespace cvcascade {
 namespace {
 
+void throw_if_cancelled(const std::atomic_bool* flag) {
+    if (flag != nullptr && flag->load(std::memory_order_relaxed))
+        throw std::runtime_error("Task cancelled by user.");
+}
+
+void throw_if_cancelled(const PhotogrammetryOptions& options) {
+    throw_if_cancelled(options.cancellation_flag);
+}
+
 std::string trim(std::string value) {
     const auto first = value.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return {};
@@ -470,7 +479,8 @@ CameraModel calibrate_camera_from_list(
     const std::filesystem::path& calibration_output,
     int board_cols,
     int board_rows,
-    double square_size_mm) {
+    double square_size_mm,
+    const std::atomic_bool* cancellation_flag) {
 
     if (board_cols < 2 || board_rows < 2)
         throw std::invalid_argument("chessboard inner-corner columns and rows must be at least 2");
@@ -484,6 +494,7 @@ CameraModel calibrate_camera_from_list(
     cv::Size image_size;
 
     for (const auto& path : paths) {
+        throw_if_cancelled(cancellation_flag);
         const cv::Mat gray = read_gray_image(path);
         if (image_size.empty()) image_size = gray.size();
         if (gray.size() != image_size)
@@ -528,7 +539,9 @@ CameraModel calibrate_camera_from_list(
             object_points, image_points, image_size, model.camera_matrix,
             model.distortion_coefficients, rotations, translations);
     };
+    throw_if_cancelled(cancellation_flag);
     calibrate();
+    throw_if_cancelled(cancellation_flag);
 
     // Robustly remove grossly inconsistent calibration views. Reprojection error is
     // measured per view; the median/MAD threshold is resistant to one bad image.
@@ -570,11 +583,14 @@ CameraModel calibrate_camera_from_list(
             model.calibration_views_rejected = object_points.size() - kept_objects.size();
             object_points = std::move(kept_objects);
             image_points = std::move(kept_images);
+            throw_if_cancelled(cancellation_flag);
             calibrate();
+            throw_if_cancelled(cancellation_flag);
         }
     }
     model.calibration_views_used = object_points.size();
 
+    throw_if_cancelled(cancellation_flag);
     cv::FileStorage output(calibration_output.string(), cv::FileStorage::WRITE);
     if (!output.isOpened()) throw std::runtime_error("cannot write calibration file: " + calibration_output.string());
     output << "camera_matrix" << model.camera_matrix;
@@ -762,11 +778,13 @@ ReconstructionStats reconstruct_multiview(
         }
         bundle_tracks.push_back(std::move(accepted));
     }
+    throw_if_cancelled(options);
     if (bundle_tracks.size() >= 8 && bundle_landmarks.size() >= 8) {
         BundleAdjustmentOptions ba_options;
         ba_options.max_iterations = 12;
         const auto ba = optimize_global_bundle(camera.camera_matrix, bundle_tracks,
                                                bundle_cameras, bundle_landmarks, ba_options);
+        throw_if_cancelled(options);
         stats.shared_tracks = ba.tracks;
         stats.bundle_observations = ba.observations;
         stats.bundle_initial_rmse = ba.initial_rmse;
@@ -796,6 +814,7 @@ ReconstructionStats reconstruct_multiview(
     double valid_ratio_sum = 0.0;
 
     for (std::size_t i = 0; i < pair_poses.size(); ++i) {
+        throw_if_cancelled(options);
         const cv::Mat& color_first = output_ply.empty() ? images[i] : color_images[i];
         double valid_ratio = 0.0;
         MeshTopologyReport topology;
@@ -819,10 +838,12 @@ ReconstructionStats reconstruct_multiview(
     if (stats.triangles == 0)
         throw std::runtime_error("dense stereo produced no valid triangles; check overlap, lighting, texture and disparity range");
 
+    throw_if_cancelled(options);
     StlAPI_Writer writer;
     if (!writer.Write(compound, output_stl.string().c_str()))
         throw std::runtime_error("Open CASCADE failed to write STL: " + output_stl.string());
 
+    throw_if_cancelled(options);
     if (!output_ply.empty()) {
         const auto fused = fuse_point_cloud_voxels(
             cloud_samples, options.fusion_voxel_size, options.min_fusion_observations);
