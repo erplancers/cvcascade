@@ -132,6 +132,9 @@ public:
         SetSizer(root);
 
         auto* menu_file = new wxMenu();
+        menu_file->Append(2001, "&Open project…");
+        menu_file->Append(2002, "&Save project…");
+        menu_file->AppendSeparator();
         menu_file->Append(wxID_ABOUT, "&About CVCascade Studio...");
         menu_file->AppendSeparator();
         menu_file->Append(wxID_EXIT, "E&xit");
@@ -416,6 +419,14 @@ private:
             "the STL retains per-pair surfaces. Review bundle-adjustment and mesh-topology diagnostics; conservative repair does not guarantee watertightness.");
         note->Wrap(1000);
         outer->Add(note, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        auto* preset_row = new wxBoxSizer(wxHORIZONTAL);
+        auto* save_preset = new wxButton(scroller, wxID_ANY, "Save settings preset…");
+        auto* load_preset = new wxButton(scroller, wxID_ANY, "Load settings preset…");
+        preset_row->Add(save_preset, 1, wxRIGHT, 6);
+        preset_row->Add(load_preset, 1, wxLEFT, 6);
+        outer->Add(preset_row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        save_preset->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { SavePreset(); });
+        load_preset->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { LoadPreset(); });
         auto* run = new wxButton(scroller, wxID_ANY, "Reconstruct mesh and point cloud");
         run->SetMinSize(wxSize(-1, 40));
         outer->Add(run, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
@@ -633,6 +644,128 @@ private:
             return text.str();
         });
     }
+
+
+    void WriteSettings(cv::FileStorage& fs, bool preset_only) {
+        fs << "schema_version" << 1;
+        if (!preset_only) {
+            fs << "relief_input" << relief_input_->GetValue().ToStdString()
+               << "relief_output" << relief_output_->GetValue().ToStdString()
+               << "relief_width" << relief_width_->GetValue()
+               << "relief_height" << relief_height_->GetValue()
+               << "relief_dimension" << relief_dimension_->GetValue()
+               << "relief_threads" << relief_threads_->GetValue()
+               << "relief_invert" << static_cast<int>(relief_invert_->GetValue())
+               << "calibration_images" << calibration_images_->GetValue().ToStdString()
+               << "calibration_output" << calibration_output_->GetValue().ToStdString()
+               << "board_cols" << board_cols_->GetValue()
+               << "board_rows" << board_rows_->GetValue()
+               << "square_size" << square_size_->GetValue();
+        }
+        fs << "reconstruction_images" << reconstruction_images_->GetValue().ToStdString()
+           << "reconstruction_calibration" << reconstruction_calibration_->GetValue().ToStdString()
+           << "reconstruction_stl" << reconstruction_stl_->GetValue().ToStdString()
+           << "reconstruction_ply" << reconstruction_ply_->GetValue().ToStdString()
+           << "reconstruction_report" << reconstruction_report_->GetValue().ToStdString()
+           << "reconstruction_dimension" << reconstruction_dimension_->GetValue()
+           << "disparities" << disparities_->GetValue()
+           << "block_size" << block_size_->GetValue()
+           << "min_inliers" << min_inliers_->GetValue()
+           << "baseline_mm" << baseline_mm_->GetValue()
+           << "max_depth" << max_depth_->GetValue()
+           << "depth_jump" << depth_jump_->GetValue()
+           << "lr_tolerance" << lr_tolerance_->GetValue()
+           << "fusion_voxel" << fusion_voxel_->GetValue()
+           << "speckle_window" << speckle_window_->GetValue()
+           << "speckle_range" << speckle_range_->GetValue();
+    }
+
+    void ReadSettings(const cv::FileStorage& fs, bool preset_only) {
+        auto string_value = [&](const char* key, wxTextCtrl* control) {
+            const auto node = fs[key];
+            if (!node.empty()) { std::string value; node >> value; control->SetValue(wxString::FromUTF8(value)); }
+        };
+        auto int_value = [&](const char* key, wxSpinCtrl* control) {
+            const auto node = fs[key];
+            if (!node.empty()) { int value = control->GetValue(); node >> value; control->SetValue(value); }
+        };
+        auto double_value = [&](const char* key, wxSpinCtrlDouble* control) {
+            const auto node = fs[key];
+            if (!node.empty()) { double value = control->GetValue(); node >> value; control->SetValue(value); }
+        };
+        if (!preset_only) {
+            string_value("relief_input", relief_input_);
+            string_value("relief_output", relief_output_);
+            double_value("relief_width", relief_width_);
+            double_value("relief_height", relief_height_);
+            int_value("relief_dimension", relief_dimension_);
+            int_value("relief_threads", relief_threads_);
+            const auto invert = fs["relief_invert"];
+            if (!invert.empty()) { int value = 0; invert >> value; relief_invert_->SetValue(value != 0); }
+            string_value("calibration_images", calibration_images_);
+            string_value("calibration_output", calibration_output_);
+            int_value("board_cols", board_cols_);
+            int_value("board_rows", board_rows_);
+            double_value("square_size", square_size_);
+        }
+        string_value("reconstruction_images", reconstruction_images_);
+        string_value("reconstruction_calibration", reconstruction_calibration_);
+        string_value("reconstruction_stl", reconstruction_stl_);
+        string_value("reconstruction_ply", reconstruction_ply_);
+        string_value("reconstruction_report", reconstruction_report_);
+        int_value("reconstruction_dimension", reconstruction_dimension_);
+        int_value("disparities", disparities_);
+        int_value("block_size", block_size_);
+        int_value("min_inliers", min_inliers_);
+        double_value("baseline_mm", baseline_mm_);
+        double_value("max_depth", max_depth_);
+        double_value("depth_jump", depth_jump_);
+        double_value("lr_tolerance", lr_tolerance_);
+        double_value("fusion_voxel", fusion_voxel_);
+        int_value("speckle_window", speckle_window_);
+        int_value("speckle_range", speckle_range_);
+    }
+
+    void SaveSettingsDialog(bool preset_only) {
+        wxFileDialog dialog(this, preset_only ? "Save reconstruction preset" : "Save project",
+                            "", preset_only ? "reconstruction-preset.yml" : "project.cvcascade.yml",
+                            "CVCascade YAML (*.yml;*.yaml)|*.yml;*.yaml|All files|*.*",
+                            wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+        if (dialog.ShowModal() != wxID_OK) return;
+        try {
+            cv::FileStorage fs(dialog.GetPath().ToStdString(), cv::FileStorage::WRITE);
+            if (!fs.isOpened()) throw std::runtime_error("Cannot open settings file for writing.");
+            WriteSettings(fs, preset_only);
+            fs.release();
+            Log(std::string(preset_only ? "Saved preset: " : "Saved project: ") + dialog.GetPath().ToStdString());
+        } catch (const std::exception& e) {
+            wxMessageBox(wxString::FromUTF8(e.what()), "Save failed", wxOK | wxICON_ERROR, this);
+        }
+    }
+
+    void LoadSettingsDialog(bool preset_only) {
+        wxFileDialog dialog(this, preset_only ? "Load reconstruction preset" : "Open project",
+                            "", "", "CVCascade YAML (*.yml;*.yaml)|*.yml;*.yaml|All files|*.*",
+                            wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+        if (dialog.ShowModal() != wxID_OK) return;
+        try {
+            cv::FileStorage fs(dialog.GetPath().ToStdString(), cv::FileStorage::READ);
+            if (!fs.isOpened()) throw std::runtime_error("Cannot open settings file.");
+            int version = 0;
+            fs["schema_version"] >> version;
+            if (version != 1) throw std::runtime_error("Unsupported or missing project schema_version.");
+            ReadSettings(fs, preset_only);
+            if (!preset_only && !relief_input_->GetValue().empty()) UpdatePreview(relief_input_->GetValue());
+            Log(std::string(preset_only ? "Loaded preset: " : "Opened project: ") + dialog.GetPath().ToStdString());
+        } catch (const std::exception& e) {
+            wxMessageBox(wxString::FromUTF8(e.what()), "Load failed", wxOK | wxICON_ERROR, this);
+        }
+    }
+
+    void SaveProject() { SaveSettingsDialog(false); }
+    void OpenProject() { LoadSettingsDialog(false); }
+    void SavePreset() { SaveSettingsDialog(true); }
+    void LoadPreset() { LoadSettingsDialog(true); }
 
     void OnClose(wxCloseEvent& event) {
         if (busy_) {
