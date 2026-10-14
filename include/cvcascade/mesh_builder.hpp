@@ -1,8 +1,10 @@
 #pragma once
 #include <opencv2/core.hpp>
+#include <atomic>
 #include <string>
 namespace cvcascade {
 struct MeshOptions {
+    const std::atomic_bool* cancellation_flag = nullptr;
     double width = 100.0;
     double max_height = 20.0;
     bool invert = false;
