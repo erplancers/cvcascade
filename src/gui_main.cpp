@@ -603,6 +603,7 @@ private:
         options.max_height = relief_height_->GetValue();
         options.max_dimension = relief_dimension_->GetValue();
         options.invert = relief_invert_->GetValue();
+        options.cancellation_flag = &cancel_requested_;
         const int threads = relief_threads_->GetValue();
 
         RunJob("Photo relief", [input, output, options, threads]() {
@@ -635,7 +636,7 @@ private:
             return;
         }
         RunJob("Camera calibration", [images, output, cols, rows, square]() {
-            const auto model = cvcascade::calibrate_camera_from_list(images, output, cols, rows, square);
+            const auto model = cvcascade::calibrate_camera_from_list(images, output, cols, rows, square, &cancel_requested_);
             std::ostringstream text;
             text << "Calibration saved: " << output
                  << "\nImage size: " << model.image_size.width << " x " << model.image_size.height
