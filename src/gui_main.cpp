@@ -118,6 +118,17 @@ public:
         gauge_ = new wxGauge(status_panel, wxID_ANY, 100, wxDefaultPosition, wxSize(-1, 14));
         status_row->Add(status_, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
         status_row->Add(gauge_, 0, wxALIGN_CENTER_VERTICAL | wxEXPAND, 0);
+        cancel_button_ = new wxButton(status_panel, wxID_ANY, "Cancel task");
+        cancel_button_->Enable(false);
+        status_row->Add(cancel_button_, 0, wxLEFT, 8);
+        cancel_button_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (busy_) {
+                cancel_requested_.store(true, std::memory_order_relaxed);
+                cancel_button_->Enable(false);
+                status_->SetLabel("Cancellation requested…");
+                Log("Cancellation requested. Active OpenCV kernels may finish before cancellation takes effect.");
+            }
+        });
         status_sizer->Add(status_row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 8);
 
         auto* log_label = new wxStaticText(status_panel, wxID_ANY, "Activity log");
@@ -170,6 +181,8 @@ private:
     wxStaticText* status_ = nullptr;
     wxGauge* gauge_ = nullptr;
     wxTextCtrl* log_ = nullptr;
+    wxButton* cancel_button_ = nullptr;
+    std::atomic_bool cancel_requested_{false};
     wxTimer timer_;
     std::thread worker_;
     std::atomic_bool busy_{false};
