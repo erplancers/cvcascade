@@ -79,7 +79,8 @@ CameraModel calibrate_camera_from_list(
     const std::filesystem::path& calibration_output,
     int board_cols,
     int board_rows,
-    double square_size_mm);
+    double square_size_mm,
+    const std::atomic_bool* cancellation_flag = nullptr);
 
 CameraModel load_camera_model(const std::filesystem::path& calibration_path);
 
