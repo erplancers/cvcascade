@@ -762,11 +762,13 @@ ReconstructionStats reconstruct_multiview(
         }
         bundle_tracks.push_back(std::move(accepted));
     }
+    throw_if_cancelled(options);
     if (bundle_tracks.size() >= 8 && bundle_landmarks.size() >= 8) {
         BundleAdjustmentOptions ba_options;
         ba_options.max_iterations = 12;
         const auto ba = optimize_global_bundle(camera.camera_matrix, bundle_tracks,
                                                bundle_cameras, bundle_landmarks, ba_options);
+        throw_if_cancelled(options);
         stats.shared_tracks = ba.tracks;
         stats.bundle_observations = ba.observations;
         stats.bundle_initial_rmse = ba.initial_rmse;
@@ -796,6 +798,7 @@ ReconstructionStats reconstruct_multiview(
     double valid_ratio_sum = 0.0;
 
     for (std::size_t i = 0; i < pair_poses.size(); ++i) {
+        throw_if_cancelled(options);
         const cv::Mat& color_first = output_ply.empty() ? images[i] : color_images[i];
         double valid_ratio = 0.0;
         MeshTopologyReport topology;
@@ -819,10 +822,12 @@ ReconstructionStats reconstruct_multiview(
     if (stats.triangles == 0)
         throw std::runtime_error("dense stereo produced no valid triangles; check overlap, lighting, texture and disparity range");
 
+    throw_if_cancelled(options);
     StlAPI_Writer writer;
     if (!writer.Write(compound, output_stl.string().c_str()))
         throw std::runtime_error("Open CASCADE failed to write STL: " + output_stl.string());
 
+    throw_if_cancelled(options);
     if (!output_ply.empty()) {
         const auto fused = fuse_point_cloud_voxels(
             cloud_samples, options.fusion_voxel_size, options.min_fusion_observations);
