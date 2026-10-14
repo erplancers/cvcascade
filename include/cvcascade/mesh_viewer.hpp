@@ -2,6 +2,8 @@
 
 #include <wx/panel.h>
 #include <array>
+#include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <vector>
