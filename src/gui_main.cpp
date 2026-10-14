@@ -437,6 +437,77 @@ private:
         page->SetSizer(page_sizer);
     }
 
+
+    void BuildMeshPage() {
+        auto* page = new wxPanel(notebook_);
+        notebook_->AddPage(page, "Mesh validation & viewer");
+        auto* root = new wxBoxSizer(wxVERTICAL);
+        auto* intro = new wxStaticText(page, wxID_ANY,
+            "Inspect an STL mesh interactively, check basic file/geometry integrity, export a validation report, or save a copy.");
+        intro->Wrap(1000);
+        root->Add(intro, 0, wxALL, 10);
+        mesh_path_ = AddPathRow(page, root, "STL mesh to inspect", "", PickMode::Open,
+            "STL mesh (*.stl)|*.stl|All files|*.*",
+            [this](const wxString& path) { LoadMeshFromPath(path); });
+        auto* actions = new wxBoxSizer(wxHORIZONTAL);
+        auto* validate = new wxButton(page, wxID_ANY, "Load / validate mesh");
+        auto* report = new wxButton(page, wxID_ANY, "Export validation JSON…");
+        auto* copy = new wxButton(page, wxID_ANY, "Export STL copy…");
+        actions->Add(validate, 1, wxRIGHT, 6);
+        actions->Add(report, 1, wxLEFT | wxRIGHT, 6);
+        actions->Add(copy, 1, wxLEFT, 6);
+        root->Add(actions, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        mesh_summary_ = new wxStaticText(page, wxID_ANY, "No mesh loaded");
+        mesh_summary_->Wrap(1100);
+        root->Add(mesh_summary_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        mesh_viewer_ = new cvcascade::gui::MeshViewerPanel(page);
+        root->Add(mesh_viewer_, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        validate->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { LoadMeshFromPath(mesh_path_->GetValue()); });
+        report->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            wxFileDialog dialog(this, "Export mesh validation report", "", "mesh-validation.json",
+                                "JSON report (*.json)|*.json|All files|*.*", wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+            if (dialog.ShowModal() != wxID_OK) return;
+            std::string error;
+            if (!mesh_viewer_->ExportInspectionJson(dialog.GetPath().ToStdString(), error)) {
+                wxMessageBox(wxString::FromUTF8(error), "Export failed", wxOK | wxICON_ERROR, this);
+                return;
+            }
+            Log("Exported mesh validation report: " + dialog.GetPath());
+        });
+        copy->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            const std::filesystem::path source(mesh_path_->GetValue().ToStdString());
+            if (!std::filesystem::is_regular_file(source)) {
+                wxMessageBox("Load a valid STL file first.", "No mesh", wxOK | wxICON_WARNING, this);
+                return;
+            }
+            wxFileDialog dialog(this, "Export STL copy", "", source.filename().string(),
+                                "STL mesh (*.stl)|*.stl|All files|*.*", wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+            if (dialog.ShowModal() != wxID_OK) return;
+            try {
+                const auto destination = std::filesystem::path(dialog.GetPath().ToStdString());
+                if (std::filesystem::absolute(source).lexically_normal() != std::filesystem::absolute(destination).lexically_normal())
+                    std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing);
+                Log("Exported STL copy: " + destination.string());
+            } catch (const std::exception& e) {
+                wxMessageBox(wxString::FromUTF8(e.what()), "Export failed", wxOK | wxICON_ERROR, this);
+            }
+        });
+        page->SetSizer(root);
+    }
+
+    void LoadMeshFromPath(const wxString& path) {
+        if (path.empty() || mesh_viewer_ == nullptr) return;
+        std::string error;
+        if (!mesh_viewer_->LoadStl(path.ToStdString(), error)) {
+            mesh_summary_->SetLabel(wxString::FromUTF8(error));
+            wxMessageBox(wxString::FromUTF8(error), "Mesh validation failed", wxOK | wxICON_ERROR, this);
+            return;
+        }
+        mesh_summary_->SetLabel(wxString::FromUTF8(mesh_viewer_->Inspection().summary));
+        Layout();
+        Log("Loaded and inspected STL: " + path);
+    }
+
     void UpdatePreview(const wxString& path) {
         if (path.empty()) return;
         const cv::Mat image = cv::imread(path.ToStdString(), cv::IMREAD_COLOR);
@@ -610,7 +681,7 @@ private:
         options.left_right_tolerance = lr_tolerance_->GetValue();
         options.fusion_voxel_size = fusion_voxel_->GetValue();
         options.speckle_window_size = speckle_window_->GetValue();
-        options.speckle_range = speckle_range_->GetValue();
+        options.speckle_range = speckle_range_->GetValue();\n        options.cancellation_flag = &cancel_requested_;
 
         RunJob("Multi-view reconstruction", [images, calibration, stl, ply, report, options]() {
             const auto stats = cvcascade::reconstruct_multiview(images, calibration, stl, options, ply);
@@ -666,7 +737,7 @@ private:
            << "reconstruction_calibration" << reconstruction_calibration_->GetValue().ToStdString()
            << "reconstruction_stl" << reconstruction_stl_->GetValue().ToStdString()
            << "reconstruction_ply" << reconstruction_ply_->GetValue().ToStdString()
-           << "reconstruction_report" << reconstruction_report_->GetValue().ToStdString()
+           << "reconstruction_report" << reconstruction_report_->GetValue().ToStdString()\n           << "mesh_path" << mesh_path_->GetValue().ToStdString()
            << "reconstruction_dimension" << reconstruction_dimension_->GetValue()
            << "disparities" << disparities_->GetValue()
            << "block_size" << block_size_->GetValue()
@@ -712,7 +783,7 @@ private:
         string_value("reconstruction_calibration", reconstruction_calibration_);
         string_value("reconstruction_stl", reconstruction_stl_);
         string_value("reconstruction_ply", reconstruction_ply_);
-        string_value("reconstruction_report", reconstruction_report_);
+        string_value("reconstruction_report", reconstruction_report_);\n        string_value("mesh_path", mesh_path_);
         int_value("reconstruction_dimension", reconstruction_dimension_);
         int_value("disparities", disparities_);
         int_value("block_size", block_size_);
@@ -755,7 +826,7 @@ private:
             fs["schema_version"] >> version;
             if (version != 1) throw std::runtime_error("Unsupported or missing project schema_version.");
             ReadSettings(fs, preset_only);
-            if (!preset_only && !relief_input_->GetValue().empty()) UpdatePreview(relief_input_->GetValue());
+            if (!preset_only && !relief_input_->GetValue().empty()) UpdatePreview(relief_input_->GetValue());\n            if (!preset_only && !mesh_path_->GetValue().empty()) LoadMeshFromPath(mesh_path_->GetValue());
             Log(std::string(preset_only ? "Loaded preset: " : "Opened project: ") + dialog.GetPath().ToStdString());
         } catch (const std::exception& e) {
             wxMessageBox(wxString::FromUTF8(e.what()), "Load failed", wxOK | wxICON_ERROR, this);
