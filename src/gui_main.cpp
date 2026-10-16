@@ -652,15 +652,16 @@ private:
         busy_ = false;
         cancel_button_->Enable(false);
         notebook_->Enable(true);
-        status_->SetLabel(succeeded ? label + " completed." : label + " failed.");
-        Log((succeeded ? "Completed: " : "Failed: ") + label);
+        const bool cancelled = !succeeded && (cancel_requested_ || result.find("cancelled") != std::string::npos);
+        status_->SetLabel(succeeded ? label + " completed." : cancelled ? label + " cancelled." : label + " failed.");
+        Log((succeeded ? "Completed: " : cancelled ? "Cancelled: " : "Failed: ") + label);
         Log(wxString::FromUTF8(result));
         if (succeeded)
             wxMessageBox(wxString::FromUTF8(result), label + " complete",
                          wxOK | wxICON_INFORMATION, this);
         else
-            wxMessageBox(wxString::FromUTF8(result), label + " failed",
-                         wxOK | wxICON_ERROR, this);
+            wxMessageBox(wxString::FromUTF8(result), cancelled ? label + " cancelled" : label + " failed",
+                         wxOK | (cancelled ? wxICON_INFORMATION : wxICON_ERROR), this);
     }
 
     void RunRelief() {
@@ -798,6 +799,11 @@ private:
                 WriteQualityReport(report, stl, ply, stats);
                 text << "\nQuality report: " << report;
             }
+            wxTheApp->CallAfter([this, stl]() {
+                mesh_path_->SetValue(wxString::FromUTF8(stl));
+                if (mesh_viewer_->LoadStl(stl))
+                    mesh_validation_->SetValue(wxString::FromUTF8(mesh_viewer_->ValidationSummary()));
+            });
             return text.str();
         });
     }
