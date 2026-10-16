@@ -15,6 +15,7 @@
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
