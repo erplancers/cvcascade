@@ -90,6 +90,7 @@ public:
           timer_(this) {
         SetMinSize(wxSize(900, 680));
         wxInitAllImageHandlers();
+        if (wxConfigBase::Get(false) == nullptr) wxConfigBase::Set(new wxConfig("CVCascade Studio"));
 
         auto* root = new wxBoxSizer(wxVERTICAL);
         auto* heading = new wxPanel(this);
