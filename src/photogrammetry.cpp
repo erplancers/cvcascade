@@ -621,8 +621,14 @@ ReconstructionStats reconstruct_multiview(
     const std::filesystem::path& calibration_path,
     const std::filesystem::path& output_stl,
     const PhotogrammetryOptions& options,
-    const std::filesystem::path& output_ply) {
+    const std::filesystem::path& output_ply,
+    const std::function<bool()>& cancellation_requested) {
 
+    const auto check_cancelled = [&]() {
+        if (cancellation_requested && cancellation_requested())
+            throw std::runtime_error("reconstruction cancelled by user");
+    };
+    check_cancelled();
     if (options.max_dimension < 64) throw std::invalid_argument("max-dimension must be at least 64");
     if (options.num_disparities < 16 || options.num_disparities % 16 != 0)
         throw std::invalid_argument("num-disparities must be a positive multiple of 16");
@@ -662,6 +668,7 @@ ReconstructionStats reconstruct_multiview(
     images.reserve(paths.size());
     color_images.reserve(paths.size());
     for (const auto& path : paths) {
+        check_cancelled();
         images.push_back(resize_image(read_gray_image(path), options.max_dimension));
         if (!output_ply.empty())
             color_images.push_back(resize_image(read_color_image(path), options.max_dimension));
@@ -693,6 +700,7 @@ ReconstructionStats reconstruct_multiview(
     double inlier_ratio_sum = 0.0;
 
     for (std::size_t i = 1; i < images.size(); ++i) {
+        check_cancelled();
         RelativePose pose = estimate_relative_pose(images[i - 1], images[i], camera, options.min_inliers);
         if (options.baseline_mm > 0.0) {
             const double norm = cv::norm(pose.translation);
@@ -709,7 +717,9 @@ ReconstructionStats reconstruct_multiview(
     }
     // Build persistent tracks across all views, triangulate shared landmarks in the
     // chained-pose initialization, then jointly refine every camera and landmark.
+    check_cancelled();
     const auto raw_tracks = build_shared_feature_tracks(images, 0.75, 2);
+    check_cancelled();
     std::vector<BundleCamera> bundle_cameras(images.size());
     for (std::size_t i = 0; i < images.size(); ++i) {
         cv::Rodrigues(camera_rotations[i], bundle_cameras[i].rotation_vector);
@@ -725,6 +735,7 @@ ReconstructionStats reconstruct_multiview(
         projections[i] = camera.camera_matrix * extrinsic;
     }
     for (const auto& track : raw_tracks) {
+        check_cancelled();
         if (track.observations.size() < 2) continue;
         const auto& first = track.observations.front();
         const auto& last = track.observations.back();
@@ -762,11 +773,13 @@ ReconstructionStats reconstruct_multiview(
         }
         bundle_tracks.push_back(std::move(accepted));
     }
+    check_cancelled();
     if (bundle_tracks.size() >= 8 && bundle_landmarks.size() >= 8) {
         BundleAdjustmentOptions ba_options;
         ba_options.max_iterations = 12;
         const auto ba = optimize_global_bundle(camera.camera_matrix, bundle_tracks,
                                                bundle_cameras, bundle_landmarks, ba_options);
+        check_cancelled();
         stats.shared_tracks = ba.tracks;
         stats.bundle_observations = ba.observations;
         stats.bundle_initial_rmse = ba.initial_rmse;
@@ -796,6 +809,7 @@ ReconstructionStats reconstruct_multiview(
     double valid_ratio_sum = 0.0;
 
     for (std::size_t i = 0; i < pair_poses.size(); ++i) {
+        check_cancelled();
         const cv::Mat& color_first = output_ply.empty() ? images[i] : color_images[i];
         double valid_ratio = 0.0;
         MeshTopologyReport topology;
@@ -819,14 +833,17 @@ ReconstructionStats reconstruct_multiview(
     if (stats.triangles == 0)
         throw std::runtime_error("dense stereo produced no valid triangles; check overlap, lighting, texture and disparity range");
 
+    check_cancelled();
     StlAPI_Writer writer;
     if (!writer.Write(compound, output_stl.string().c_str()))
         throw std::runtime_error("Open CASCADE failed to write STL: " + output_stl.string());
 
     if (!output_ply.empty()) {
+        check_cancelled();
         const auto fused = fuse_point_cloud_voxels(
             cloud_samples, options.fusion_voxel_size, options.min_fusion_observations);
         if (fused.empty()) throw std::runtime_error("no points remain after dense point-cloud fusion");
+        check_cancelled();
         write_ply_point_cloud(output_ply, fused);
         stats.fused_points = fused.size();
     }
