@@ -3,6 +3,7 @@
 #include <opencv2/core.hpp>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <vector>
 
 namespace cvcascade {
@@ -94,6 +95,7 @@ ReconstructionStats reconstruct_multiview(
     const std::filesystem::path& calibration_path,
     const std::filesystem::path& output_stl,
     const PhotogrammetryOptions& options,
-    const std::filesystem::path& output_ply = {});
+    const std::filesystem::path& output_ply = {},
+    const std::function<bool()>& cancellation_requested = {});
 
 } // namespace cvcascade
